@@ -1,0 +1,13 @@
+{
+  "name": "explain-sec",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "frontend": "cd dashboard/frontend && npm start",
+    "backend": "PYTHONPATH=. uvicorn backend.app:app --reload --port 8000",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
