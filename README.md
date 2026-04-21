@@ -88,13 +88,13 @@ npx playwright test --workers=1
 │  IRDashboard        SOCManagerDashboard   AdminDashboard        │
 │  SOCManager_CommandConsole                                      │
 │                                                                 │
-│  ┌────────────────────────────────────┐                        │
-│  │       Client-Side Wrappers         │                        │
-│  │   src/utils/socFunctions.js        │                        │
-│  │   callGovernanceAction()           │                        │
-│  │   callApproveEscalation()          │                        │
-│  │   callApproveContainment()  ...    │                        │
-│  └────────────────┬───────────────────┘                        │
+│  ┌────────────────────────────────────┐                         │
+│  │       Client-Side Wrappers         │                         │
+│  │   src/utils/socFunctions.js        │                         │
+│  │   callGovernanceAction()           │                         │
+│  │   callApproveEscalation()          │                         │
+│  │   callApproveContainment()  ...    │                         │
+│  └────────────────┬───────────────────┘                         │
 └───────────────────┼─────────────────────────────────────────────┘
                     │  Firebase Callable Functions (HTTPS)
                     ▼
@@ -102,13 +102,13 @@ npx playwright test --workers=1
 │                    FIREBASE CLOUD FUNCTIONS                     │
 │                   functions/socActions.js                       │
 │                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  governanceActions (unified dispatcher)                  │  │
-│  │  ├─ OVERRIDE_DECISION      ├─ SLA_OVERRIDE               │  │
-│  │  ├─ TRANSFER_OWNERSHIP     ├─ CONVERT_TO_THREAT_HUNT      │  │
-│  │  ├─ REOPEN_INCIDENT        ├─ REJECT_CONTAINMENT          │  │
-│  │  ├─ ACCEPT_RISK            ├─ TAG_RCA    ├─ TAG_PIR        │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  governanceActions (unified dispatcher)                  │   │
+│  │  ├─ OVERRIDE_DECISION      ├─ SLA_OVERRIDE               │   │
+│  │  ├─ TRANSFER_OWNERSHIP     ├─ CONVERT_TO_THREAT_HUNT     │   │
+│  │  ├─ REOPEN_INCIDENT        ├─ REJECT_CONTAINMENT         │   │
+│  │  ├─ ACCEPT_RISK            ├─ TAG_RCA    ├─ TAG_PIR      │   │
+│  └──────────────────────────────────────────────────────────┘   │
 │                                                                 │
 │  escalateIncident    approveEscalation   denyEscalation         │
 │  performContainment  approveContainment  lockIncident           │
@@ -116,13 +116,13 @@ npx playwright test --workers=1
 │  generateAiOpsNarration            (planned)                    │
 │                                                                 │
 │  Security Layers applied to EVERY function:                     │
-│  1. Firebase Auth token verification                           │
-│  2. Role fetched from Firestore via Admin SDK                  │
-│  3. Governance lock check (assertNotLocked)                    │
-│  4. State machine validation (TRANSITIONS map)                 │
-│  5. Mandatory reason enforcement                               │
-│  6. Idempotency guard                                          │
-│  7. writeAuditLog (immutable — client cannot forge)            │
+│  1. Firebase Auth token verification                            │
+│  2. Role fetched from Firestore via Admin SDK                   │
+│  3. Governance lock check (assertNotLocked)                     │
+│  4. State machine validation (TRANSITIONS map)                  │
+│  5. Mandatory reason enforcement                                │
+│  6. Idempotency guard                                           │
+│  7. writeAuditLog (immutable — client cannot forge)             │
 └─────────────────────────────────────────────────────────────────┘
                     │  Admin SDK (bypasses Firestore rules)
                     ▼
@@ -132,7 +132,7 @@ npx playwright test --workers=1
 │  /issues/{id}         Incident documents                        │
 │  /users/{uid}         User profiles + roles (RBAC source)       │
 │  /audit_logs/{id}     Immutable (client create/update: false)   │
-│  /notifications/{id}  Role-scoped real-time alerts             │
+│  /notifications/{id}  Role-scoped real-time alerts              │
 │  /roles/{id}          Role definitions                          │
 │  /config/{id}         Platform configuration                    │
 └─────────────────────────────────────────────────────────────────┘
