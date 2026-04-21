@@ -4,14 +4,12 @@ import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAs-daZxmVmTxqf0qBOdLH0-YGogbl0_Qk",
-  authDomain: "explain-sec.firebaseapp.com",
-  databaseURL: "https://explain-sec-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "explain-sec",
-  storageBucket: "explain-sec.firebasestorage.app",
-  messagingSenderId: "603242318535",
-  appId: "1:603242318535:web:6a38815887fadcdc200ce2",
-  measurementId: "G-BH28D6C63M"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_APP_ID
 };
 
 // ✅ One initialization
