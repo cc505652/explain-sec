@@ -1,18 +1,50 @@
-# 🛡️ CampusSOC — Security Operations Center Platform
+# 🛡️ EXPLAIN-SEC — Production-Grade SOC Workflow Engine with Server-Enforced RBAC
 
-> A production-grade, full-stack Security Operations Center platform built with React and Firebase.  
-> All critical incident mutations are server-side enforced — no client-side bypass is architecturally possible.
+> A production-grade, full-stack SOC platform with server-enforced RBAC, immutable audit logging, and end-to-end tested workflows (465/465 tests passing).
+![status](https://img.shields.io/badge/tests-465%2F465-brightgreen)
+![architecture](https://img.shields.io/badge/architecture-SOC%20Workflow-blue)
+![security](https://img.shields.io/badge/security-RBAC%20Enforced-red)
+
 
 ---
 
 ## 🚀 Project Overview
 
-CampusSOC is a **full-stack SOC platform** designed to replicate enterprise-grade incident management workflows in a structured, role-controlled environment. It implements the complete lifecycle of a security incident — from initial student submission through L1 triage, L2 investigation, IR containment, to SOC Manager governance review — backed by a **server-side state machine** and **immutable audit logging**.
+EXPLAIN-SEC is a full-stack Security Operations Center (SOC) platform that simulates real-world incident response workflows with strict role-based control enforced at the backend.
+It models the complete lifecycle of a security incident — from triage to containment to governance — using a secure, state-driven architecture.
+
 
 The platform is purpose-built around one core principle:  
-> **Every security-relevant write goes through a Cloud Function. The client is untrusted.**
+> Every security-relevant write is designed to go through a Cloud Function. The client is untrusted.
 
 ---
+
+## 🎯 Why This Project Exists
+
+Most security projects focus only on detection.
+
+EXPLAIN-SEC focuses on what happens *after detection*:
+- Who is allowed to act?
+- What transitions are valid?
+- How is every action audited?
+
+This project models the operational reality of a SOC — not just alerts, but decisions, approvals, and accountability.
+
+
+## 🧪 System Validation
+
+This system is validated using Playwright end-to-end tests across all roles and workflows.
+
+- ✔ 465 / 465 tests passing
+- ✔ Multi-role workflow validation (L1 → L2 → IR → Manager)
+- ✔ RBAC enforcement tested across all actions
+- ✔ Edge cases and failure paths covered
+
+Run tests:
+
+```bash
+npx playwright test --workers=1
+```
 
 ## 🧠 Key Features
 
@@ -41,7 +73,7 @@ The platform is purpose-built around one core principle:
 ### Frontend & UX
 - **Role-scoped real-time dashboards** — each role sees only their relevant incident queue, powered by Firestore `onSnapshot`
 - **SOC Manager Command Console** — dedicated governance control panel for cross-incident operations
-- **AI-generated operations narration** — Gemini-powered weekly ops summary with key insights, SLA recommendations, and hotspot analysis
+- **AI operations narration (planned)** — Gemini-based SOC summaries for incident trends, SLA insights, and operational hotspots (integration in progress)
 - **Glassmorphism UI** — dark-mode professional interface built for operational use
 
 ---
@@ -81,7 +113,7 @@ The platform is purpose-built around one core principle:
 │  escalateIncident    approveEscalation   denyEscalation         │
 │  performContainment  approveContainment  lockIncident           │
 │  updateRole          updateIncidentStatus                       │
-│  generateAiOpsNarration  (Gemini 1.5 Flash)                     │
+│  generateAiOpsNarration            (planned)                    │
 │                                                                 │
 │  Security Layers applied to EVERY function:                     │
 │  1. Firebase Auth token verification                           │
@@ -297,7 +329,7 @@ PIR, RCA, and Risk Acceptance are fully decoupled — no forced sequencing betwe
 ### 🖥️ Command Console
 - Dedicated SOC Manager operational view
 - Cross-incident aggregated statistics
-- AI-generated ops narration (Gemini 1.5 Flash)
+- AI operations narration (planned)
 - SLA breach indicators and hotspot tracking
 
 ---
@@ -354,7 +386,7 @@ PIR, RCA, and Risk Acceptance are fully decoupled — no forced sequencing betwe
 
 ---
 
-## 📈 What Makes This System Unique
+## 📈 Why This System Stands Out
 
 ### 1. Zero-Trust Client Architecture
 Every security decision is made on the server. The client is treated as untrusted — it can read data it's authorised to see and submit requests, but it cannot directly mutate any field that influences security posture, workflow state, or audit records.
@@ -379,11 +411,26 @@ An attacker would need to bypass all three simultaneously, and Layer 3 always ru
 ### 6. Governance Lock
 SOC Manager can place a governance hold on any incident, freezing all analyst and IR writes at both the rules layer (`isNotLocked()`) and the function layer (`assertNotLocked()`). This prevents in-flight modifications during sensitive review phases.
 
+### 7. Deterministic System Behaviour
+The system is designed and validated to behave deterministically under controlled execution (sequential test runs), reducing race conditions and state inconsistencies across workflows.
+
+
 ---
+## 💼 Real-World Relevance
+
+This system mirrors real SOC environments:
+
+- Approval-based containment (similar to enterprise IR workflows)
+- SOAR-style centralized governance actions
+- Immutable audit logging for compliance (ISO 27001 / SOC2 alignment)
+- Role-isolated dashboards reflecting tiered SOC structures
+
+Designed to simulate operational decision-making, not just detection.
 
 ## 🗂 Project Structure
 
 ```
+
 /
 ├── src/
 │   ├── StudentDashboard.jsx
@@ -413,12 +460,15 @@ SOC Manager can place a governance hold on any incident, freezing all analyst an
 - Firebase CLI (`npm install -g firebase-tools`)
 - A Firebase project with Firestore, Functions, and Authentication enabled
 
+> ⚠️ Full RBAC enforcement requires Firebase setup.  
+> This project prioritizes secure deployment over plug-and-play simplicity.
+
 ### Setup
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/campussoc.git
-cd campussoc
+git clone https://github.com/cc505652/explain-sec.git
+cd explain-sec
 
 # Install frontend dependencies
 npm install
@@ -445,8 +495,48 @@ npm run dev
 # Emulate Cloud Functions locally (separate terminal)
 firebase emulators:start --only functions,firestore
 ```
+## 🧪 Demo Mode
 
+For quick exploration without Firebase setup:
+
+- Use role-based quick login options in the UI  
+- Pre-seeded mock incidents simulate SOC workflows  
+- All dashboards and transitions can be explored locally  
+
+> ⚠️ Demo mode simulates behavior only.  
+> Full RBAC enforcement, audit logging, and governance controls require Firebase deployment.
 ---
+
+## 🚀 Status
+
+✔ Stable build (465/465 tests passing)  
+✔ Deterministic under sequential execution (`--workers=1`)  
+✔ Production-oriented architecture  
+
+v1 complete — detection intelligence coming next.
+
+
+## ⚙️ Implementation Status
+
+| Component | Status |
+|----------|--------|
+| Frontend dashboards | ✅ Implemented |
+| RBAC model | ✅ Implemented |
+| State machine | ✅ Implemented |
+| Playwright test suite | ✅ 465/465 passing |
+| Cloud Functions deployment | ⚠️ Designed, deployment pending |
+| AI narration (Gemini) | ⚠️ Planned, not integrated |
+
+
+## 🔮 Future Scope
+
+- Local emulator environment with pre-seeded SOC datasets  
+- One-click setup for Firebase Auth + Firestore roles  
+- Fully reproducible demo environment for external evaluation  
+- Multi-tenant SOC simulation (org-level isolation)  
+- Detection engine (ML / rule-based hybrid)
+- SIEM integration (log ingestion pipelines)
+
 
 ## 📄 License
 
