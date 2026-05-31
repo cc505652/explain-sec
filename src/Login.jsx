@@ -11,17 +11,6 @@ const Login = ({ onLoginSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
 
-  // Quick login account mapping for all SOC roles
-  const QUICK_LOGIN_ACCOUNTS = {
-    admin: { email: 'admin@explainsec.com', password: 'test1234', label: 'Admin', icon: 'shield_person' },
-    soc_manager: { email: 'cc505652@gmail.com', password: 'test1234', label: 'SOC Manager', icon: 'admin_panel_settings' },
-    soc_l1: { email: 'analyst@explainsec.com', password: 'test1234', label: 'SOC L1 Analyst', icon: 'search' },
-    soc_l2: { email: 'analyst1@explainsec.com', password: 'test1234', label: 'SOC L2 Analyst', icon: 'troubleshoot' },
-    ir: { email: 'ir_team@explainsec.com', password: 'test1234', label: 'Incident Response', icon: 'emergency' },
-    threat_hunter: { email: 'threat_hunter@explainsec.com', password: 'test1234', label: 'Threat Hunter', icon: 'target' },
-    student: { email: 'student@explainsec.com', password: 'test1234', label: 'Student', icon: 'school' },
-  };
-
   const quickLogin = async (role) => {
     setError('');
     setLoading(true);
