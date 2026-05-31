@@ -10,28 +10,20 @@ import {
 } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { auth, db } from "./firebase";
+import { useIncidentTimelines } from "./hooks/useIncidentTimelines";
+import { buildRenderableTimeline } from "./utils/timelineReader";
+import { computeSLA } from "./utils/slaEngine";
+import { getRoleDisplayLabel } from "./utils/normalizeRole";
 
 /* ---------- SLA HELPERS ---------- */
 
-const MS_IN_HOUR = 60 * 60 * 1000;
 const urgencyRank = { high: 3, medium: 2, low: 1 };
 const attentionOrder = { overdue: 0, delayed: 1, "on-time": 2 };
 
-function hoursSince(ts) {
-  if (!ts) return 0;
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return (Date.now() - d.getTime()) / MS_IN_HOUR;
-}
-
 function getSlaFlag(issue) {
-  if (issue.status === "open") {
-    const openedAt = issue.statusHistory?.[0]?.at;
-    if (openedAt && hoursSince(openedAt) > 24) return "delayed";
-  }
-  if (issue.status === "assigned") {
-    const assigned = issue.statusHistory?.find((h) => h.status === "assigned");
-    if (assigned && hoursSince(assigned.at) > 48) return "overdue";
-  }
+  const sla = computeSLA(issue);
+  if (sla.status === "breached") return "overdue";
+  if (sla.status === "at_risk") return "delayed";
   return "on-time";
 }
 
@@ -69,63 +61,13 @@ function formatClock(ts) {
   return d.toLocaleString();
 }
 
-const SLA_HOURS = {
-  open: 24,
-  assigned: 48
-};
-
-function formatDuration(ms) {
-  const abs = Math.abs(ms);
-  const totalMin = Math.floor(abs / (60 * 1000));
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h === 0) return `${m}m`;
-  return `${h}h ${m}m`;
-}
-
 function getSlaDisplay(issue) {
-  const createdAtMs = tsToMillis(issue.createdAt);
-  const now = Date.now();
-  if (!createdAtMs) return { label: "SLA: —", color: "#999", breached: false };
-
-  if (issue.status === "open") {
-    const deadline = createdAtMs + SLA_HOURS.open * 60 * 60 * 1000;
-    const remaining = deadline - now;
-    if (remaining >= 0) {
-      return {
-        label: `SLA: ${formatDuration(remaining)} left`,
-        color: "#1b5e20",
-        breached: false
-      };
-    }
-    return {
-      label: `SLA BREACHED: ${formatDuration(remaining)} ago`,
-      color: "#b71c1c",
-      breached: true
-    };
-  }
-
-  if (issue.status === "assigned" || issue.status === "in_progress") {
-    const assignedEntry = issue.statusHistory?.find((h) => h.status === "assigned");
-    const assignedAtMs = tsToMillis(assignedEntry?.at) || createdAtMs;
-
-    const deadline = assignedAtMs + SLA_HOURS.assigned * 60 * 60 * 1000;
-    const remaining = deadline - now;
-    if (remaining >= 0) {
-      return {
-        label: `SLA: ${formatDuration(remaining)} left`,
-        color: "#1b5e20",
-        breached: false
-      };
-    }
-    return {
-      label: `SLA BREACHED: ${formatDuration(remaining)} ago`,
-      color: "#b71c1c",
-      breached: true
-    };
-  }
-
-  return { label: "SLA: complete", color: "#0d47a1", breached: false };
+  const sla = computeSLA(issue);
+  return {
+    label: sla.label,
+    color: sla.color,
+    breached: sla.breached
+  };
 }
 
 /* ---------- PREMIUM PILLS ---------- */
@@ -163,9 +105,9 @@ function urgencyPill(urg) {
 /* ---------- STAFF OPTIONS ---------- */
 
 const STAFF_OPTIONS = [
-  { value: "soc_l1", label: "SOC Analyst L1" },
-  { value: "soc_l2", label: "SOC Analyst L2" },
-  { value: "incident_response", label: "Incident Response Team" },
+  { value: "soc_l1", label: "SOC L1 Analyst" },
+  { value: "soc_l2", label: "SOC L2 Analyst" },
+  { value: "ir", label: "Incident Response" },
   { value: "threat_hunter", label: "Threat Hunter" },
   { value: "forensics", label: "Digital Forensics" },
   { value: "cloud_security", label: "Cloud Security Team" },
@@ -174,8 +116,12 @@ const STAFF_OPTIONS = [
 
 
 function staffLabel(v) {
+  if (!v) return "Unassigned";
+  if (v === "system") return "Auto-Routed";
+  if (v === "student") return "Reporter";
+  if (v === "soc_manager") return "SOC Manager";
   const found = STAFF_OPTIONS.find((x) => x.value === v);
-  return found ? found.label : v || "Unassigned";
+  return found ? found.label : getRoleDisplayLabel(v);
 }
 
 
@@ -204,6 +150,13 @@ const darkBtnStyle = {
 
 export default function AdminIssueList() {
   const [issues, setIssues] = useState([]);
+
+  // ── Timeline renderer migration: batch fetch from incident_timeline ──
+  const incidentIds = useMemo(() => issues.map(i => i.id).filter(Boolean), [issues]);
+  const timelineDependencyKey = useMemo(() => {
+    return issues.map(i => `${i.id}:${i.status}:${i.updatedAt?.seconds || 0}`).sort().join(",");
+  }, [issues]);
+  const { timelines } = useIncidentTimelines(incidentIds, timelineDependencyKey);
 
   // ✅ Live refresh tick
   const [nowTick, setNowTick] = useState(Date.now());
@@ -369,7 +322,7 @@ export default function AdminIssueList() {
   });
 
   /* ---------- HEATMAP ---------- */
-  const hostelCounts = useMemo(() => {
+  const locationCounts = useMemo(() => {
     return issues.reduce((acc, i) => {
       if (i.isDeleted) return acc;
       acc[i.location] = (acc[i.location] || 0) + 1;
@@ -400,7 +353,7 @@ export default function AdminIssueList() {
       .filter((i) => i.status !== "resolved")
       .sort((a, b) => (b.urgencyScore ?? 0) - (a.urgencyScore ?? 0))[0];
 
-    const hotspotEntry = Object.entries(hostelCounts).sort((a, b) => b[1] - a[1])[0];
+    const hotspotEntry = Object.entries(locationCounts).sort((a, b) => b[1] - a[1])[0];
 
     const staffLoad = {};
     for (const i of active) {
@@ -414,7 +367,7 @@ export default function AdminIssueList() {
       hotspot: hotspotEntry ? { location: hotspotEntry[0], count: hotspotEntry[1] } : null,
       topStaff: topStaffEntry ? { staff: topStaffEntry[0], count: topStaffEntry[1] } : null
     };
-  }, [issues, hostelCounts, nowTick]);
+  }, [issues, locationCounts, nowTick]);
 
   /* ---------- EVIDENCE LIST ---------- */
   const evidenceIssues = useMemo(() => {
@@ -568,7 +521,7 @@ Note: AI narration has been disabled. This report uses accurate statistics only.
               {opsHighlights.topStaff ? (
                 <>
                   <div><b>{staffLabel(opsHighlights.topStaff.staff)}</b></div>
-                  <div style={{ opacity: 0.8, marginTop: 4 }}>{opsHighlights.topStaff.count} assigned tickets</div>
+                  <div style={{ opacity: 0.8, marginTop: 4 }}>{opsHighlights.topStaff.count} assigned incidents</div>
                 </>
               ) : "—"}
             </div>
@@ -608,7 +561,7 @@ Note: AI narration has been disabled. This report uses accurate statistics only.
         <h3 style={{ marginTop: 0 }}>Issue Distribution</h3>
         <table border="1" cellPadding="6" style={{ width: "100%" }}>
           <tbody>
-            {Object.entries(hostelCounts).map(([k, v]) => (
+            {Object.entries(locationCounts).map(([k, v]) => (
               <tr key={k}>
                 <td>{k}</td>
                 <td>{v}</td>
@@ -781,10 +734,10 @@ Note: AI narration has been disabled. This report uses accurate statistics only.
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #ddd" }}>
                 <strong style={{ fontSize: 13 }}>Incident Timeline</strong>
                 <ul style={{ marginTop: 8, paddingLeft: 18 }}>
-                  {(issue.statusHistory || []).slice().reverse().map((h, idx) => (
+                  {buildRenderableTimeline(timelines.get(issue.id), issue.statusHistory, "desc").map((event, idx) => (
                     <li key={idx} style={{ fontSize: 12, marginBottom: 6, opacity: 0.9 }}>
-                      <b>{String(h.status).toUpperCase()}</b> — {formatClock(h.at)}
-                      {h.note ? ` — ${h.note}` : ""}
+                      <b>{event.icon} {event.displayLabel}</b> — {formatClock(event.timestamp)}
+                      {event.note ? ` — ${event.note}` : ""}
                     </li>
                   ))}
                 </ul>
@@ -834,11 +787,11 @@ Note: AI narration has been disabled. This report uses accurate statistics only.
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <select value={galleryCategory} onChange={(e) => setGalleryCategory(e.target.value)} style={darkSelectStyle}>
                   <option value="all">All Categories</option>
-                  <option value="water">Water</option>
-                  <option value="electricity">Electricity</option>
-                  <option value="wifi">Wi-Fi</option>
-                  <option value="mess">Mess</option>
-                  <option value="maintenance">Maintenance</option>
+                  <option value="phishing">Phishing</option>
+                  <option value="malware">Malware</option>
+                  <option value="account_compromise">Account Compromise</option>
+                  <option value="data_leak">Data Leak</option>
+                  <option value="network_attack">Network Attack</option>
                   <option value="other">Other</option>
                 </select>
 
@@ -938,7 +891,7 @@ Note: AI narration has been disabled. This report uses accurate statistics only.
                       <span style={statusPill(gallerySelected.status)}>{String(gallerySelected.status).toUpperCase()}</span>
                       <span style={urgencyPill(gallerySelected.urgency)}>{String(gallerySelected.urgency).toUpperCase()}</span>
                       {gallerySelected.escalated && <span style={pillStyle("#000")}>🚨 ESCALATED</span>}
-                      <span style={pillStyle("#263238")}>👷 {staffLabel(gallerySelected.assignedTo)}</span>
+                      <span style={pillStyle("#263238")}>👤 {staffLabel(gallerySelected.assignedTo)}</span>
                     </div>
 
                     <div style={{ opacity: 0.9 }}>

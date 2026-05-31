@@ -17,11 +17,14 @@
 
 import React, { useState, useMemo, useCallback } from "react";
 import { auth } from "../firebase";
+import { useIncidentTimelines } from "../hooks/useIncidentTimelines";
+import { buildRenderableTimeline } from "../utils/timelineReader";
 import {
   callAddEvidence,
   callUpdateTags,
   callUpdateRiskScore,
 } from "../utils/socFunctions";
+import { appendTimelineEvent, TIMELINE_EVENTS } from "../security/timelineEngine";
 import {
   computeRiskScore,
   computeConfidenceScore,
@@ -98,31 +101,11 @@ function EvidenceTimeline({ events = [] }) {
     return <div style={{ color: "#64748b", fontSize: 12, padding: 12 }}>No timeline events yet</div>;
   }
 
-  const sorted = [...events].sort((a, b) => {
-    const aTime = a.at?.toMillis?.() || a.at?.seconds * 1000 || new Date(a.at).getTime() || 0;
-    const bTime = b.at?.toMillis?.() || b.at?.seconds * 1000 || new Date(b.at).getTime() || 0;
-    return bTime - aTime;
-  });
-
-  const getIcon = (status) => {
-    const icons = {
-      open: "🟢", assigned: "👤", in_progress: "🔄", resolved: "✅",
-      escalated: "🚨", ESCALATION_REQUESTED: "🚨", escalation_pending: "⏳",
-      escalation_approved: "✅", ir_in_progress: "🔍", containment_pending: "🛡️",
-      contained: "🔒", false_positive: "❌", severity_adjusted: "⚡",
-      tags_updated: "🏷️", evidence_added: "📎", risk_updated: "📊",
-      approval_requested: "📋", approval_approved: "✅", approval_denied: "❌",
-      GOVERNANCE_LOCKED: "🔐", GOVERNANCE_UNLOCKED: "🔓",
-    };
-    return icons[status] || "📌";
-  };
-
   return (
     <div style={{ maxHeight: 400, overflowY: "auto", paddingRight: 8 }}>
-      {sorted.map((event, i) => {
-        const time = event.at?.toMillis?.() || event.at?.seconds * 1000 || new Date(event.at).getTime() || 0;
-        const timeStr = time ? new Date(time).toLocaleString() : "—";
-        
+      {events.map((event, i) => {
+        const timeStr = event.timestamp ? new Date(event.timestamp).toLocaleString() : "—";
+
         return (
           <div key={i} style={{
             display: "flex", gap: 12, marginBottom: 2,
@@ -143,15 +126,17 @@ function EvidenceTimeline({ events = [] }) {
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontWeight: 600, color: "#e2e8f0", fontSize: 12 }}>
-                  {getIcon(event.status)} {event.status?.replace(/_/g, " ")}
+                  {event.icon} {event.displayLabel}
                 </span>
                 <span style={{ fontSize: 10, color: "#64748b" }}>{timeStr}</span>
               </div>
               {event.note && (
                 <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{event.note}</div>
               )}
-              {event.by && (
-                <div style={{ fontSize: 10, color: "#475569", marginTop: 1 }}>by {event.by}</div>
+              {event.actor && (
+                <div style={{ fontSize: 10, color: "#475569", marginTop: 1 }}>
+                  by {event.actor} {event.actorRole ? `(${event.actorRole})` : ""}
+                </div>
               )}
             </div>
           </div>
@@ -269,6 +254,30 @@ function EvidenceList({ evidence = [] }) {
 /* ─── MAIN COMPONENT ─────────────────────────────────────────────────────── */
 
 export default function InvestigationPanel({ issue, onClose }) {
+  const dependencyKey = `${issue.id}:${issue.status}:${issue.updatedAt?.seconds || 0}`;
+  const incidentIds = useMemo(
+    () => [issue.id],
+    [issue.id]
+  );
+  const { timelines, refetch } = useIncidentTimelines(incidentIds, dependencyKey);
+  const timelineEvents = timelines.get(issue.id) || [];
+
+  const combinedTimeline = useMemo(() => {
+    return buildRenderableTimeline(timelineEvents, issue.statusHistory, "desc");
+  }, [timelineEvents, issue.statusHistory]);
+  console.log("=== TIMELINE DEBUG ===");
+  console.log("Incident:", issue.id);
+  console.log("timelineEvents:", timelineEvents.length);
+  console.log("statusHistory:", issue.statusHistory?.length);
+  console.log("investigationHistory:", issue.investigationHistory?.length);
+  console.log("combinedTimeline:", combinedTimeline.length);
+  console.log(
+    combinedTimeline.map(e => ({
+      type: e.eventType,
+      label: e.displayLabel,
+      timestamp: e.timestamp
+    }))
+  );
   const [newTag, setNewTag] = useState("");
   const [evidenceType, setEvidenceType] = useState("note");
   const [evidenceContent, setEvidenceContent] = useState("");
@@ -310,46 +319,74 @@ export default function InvestigationPanel({ issue, onClose }) {
     try {
       const updatedTags = [...tags, ...newTag.split(",").map(t => t.trim()).filter(Boolean)];
       await callUpdateTags(issue.id, updatedTags);
+      appendTimelineEvent({
+        incidentId: issue.id,
+        eventType: TIMELINE_EVENTS.INCIDENT_UPDATED,
+        actorId: auth.currentUser?.uid || "unknown",
+        actorRole: "analyst",
+        newState: "Tags updated",
+        metadata: { reason: `Tags updated: added ${newTag}` }
+      });
       showToast("✅ Tags updated");
       setNewTag("");
+      refetch(800);
     } catch (err) {
       alert("Failed to update tags: " + (err?.message || ""));
     } finally {
       setLoading(false);
     }
-  }, [newTag, tags, issue.id]);
+  }, [newTag, tags, issue.id, refetch]);
 
   const handleRemoveTag = useCallback(async (tagToRemove) => {
     setLoading(true);
     try {
       await callUpdateTags(issue.id, tags.filter(t => t !== tagToRemove));
+      appendTimelineEvent({
+        incidentId: issue.id,
+        eventType: TIMELINE_EVENTS.INCIDENT_UPDATED,
+        actorId: auth.currentUser?.uid || "unknown",
+        actorRole: "analyst",
+        newState: "Tags updated",
+        metadata: { reason: `Tags updated: removed ${tagToRemove}` }
+      });
       showToast("✅ Tag removed");
+      refetch(800);
     } catch (err) {
       alert("Failed to remove tag: " + (err?.message || ""));
     } finally {
       setLoading(false);
     }
-  }, [tags, issue.id]);
+  }, [tags, issue.id, refetch]);
 
   const handleAddEvidence = useCallback(async () => {
     if (!evidenceContent.trim()) return;
     setLoading(true);
     try {
+      const desc = evidenceDesc || `${evidenceType} evidence`;
       await callAddEvidence(issue.id, {
         type: evidenceType,
         content: evidenceType === "note" ? evidenceContent : null,
         url: evidenceType === "link" ? evidenceContent : null,
-        description: evidenceDesc || `${evidenceType} evidence`,
+        description: desc,
+      });
+      appendTimelineEvent({
+        incidentId: issue.id,
+        eventType: TIMELINE_EVENTS.EVIDENCE_ADDED,
+        actorId: auth.currentUser?.uid || "unknown",
+        actorRole: "analyst",
+        newState: "Evidence added",
+        metadata: { reason: `Evidence added: ${desc}` }
       });
       showToast("✅ Evidence added");
       setEvidenceContent("");
       setEvidenceDesc("");
+      refetch(800);
     } catch (err) {
       alert("Failed to add evidence: " + (err?.message || ""));
     } finally {
       setLoading(false);
     }
-  }, [evidenceType, evidenceContent, evidenceDesc, issue.id]);
+  }, [evidenceType, evidenceContent, evidenceDesc, issue.id, refetch]);
 
   const handleUpdateStage = useCallback(async () => {
     if (!selectedStage) return;
@@ -367,13 +404,22 @@ export default function InvestigationPanel({ issue, onClose }) {
         riskScore: newRisk.score,
         confidenceScore: confidence,
       });
+      appendTimelineEvent({
+        incidentId: issue.id,
+        eventType: TIMELINE_EVENTS.INCIDENT_UPDATED,
+        actorId: auth.currentUser?.uid || "unknown",
+        actorRole: "analyst",
+        newState: "Risk score updated",
+        metadata: { reason: `Attack stage set to ${selectedStage} (Risk Score: ${newRisk.score})` }
+      });
       showToast("✅ Attack stage & risk updated");
+      refetch(800);
     } catch (err) {
       alert("Failed to update: " + (err?.message || ""));
     } finally {
       setLoading(false);
     }
-  }, [selectedStage, issue, confidence, sla.breached]);
+  }, [selectedStage, issue, confidence, sla.breached, refetch]);
 
   return (
     <div style={{
@@ -440,14 +486,14 @@ export default function InvestigationPanel({ issue, onClose }) {
             {/* Timeline */}
             <div style={panelStyle}>
               <div style={sectionTitle}>📅 Investigation Timeline</div>
-              <EvidenceTimeline events={issue.statusHistory || []} />
+              <EvidenceTimeline events={combinedTimeline} />
             </div>
 
             {/* Evidence */}
             <div style={panelStyle}>
               <div style={sectionTitle}>📎 Evidence ({(issue.evidenceList || []).length})</div>
               <EvidenceList evidence={issue.evidenceList || []} />
-              
+
               {/* Add Evidence Form */}
               <div style={{ marginTop: 12, padding: "12px 16px", borderRadius: 12, background: "rgba(255,255,255,0.03)" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 8 }}>ADD EVIDENCE</div>
@@ -494,7 +540,7 @@ export default function InvestigationPanel({ issue, onClose }) {
             <div style={panelStyle}>
               <div style={sectionTitle}>🎯 MITRE ATT&CK Analysis</div>
               <MitreDisplay category={issue.category} attackStage={issue.attackStage} />
-              
+
               {/* Attack Stage Selector */}
               <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
                 <select

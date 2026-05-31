@@ -17,6 +17,7 @@ import {
   deleteDoc
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
+import { useNavigate } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
 import { normalizeRole, isVisibleToRole, getVisibleToForStatus } from "./utils/roleNormalization";
 import { validateTransition } from "./utils/incidentStateGuard";
@@ -25,8 +26,21 @@ import {
   callEscalateIncident,
   callPerformContainment,
   callUpdateIncidentStatus,
+  callGovernanceAction,
 } from "./utils/socFunctions";
+import { appendTimelineEvent, appendContainmentEvent, appendEscalationEvent, appendTriageLifecycle, appendThreatConfirmed, appendIRActionSubmitted, appendAssignmentLifecycle, appendLifecycleEvent, TIMELINE_EVENTS } from "./security/timelineEngine";
+import { logLifecycleAudit, logContainmentAudit, logGovernanceAudit, AUDIT_ACTIONS } from "./security/auditEngine";
+import { useIncidentTimelines } from "./hooks/useIncidentTimelines";
+import { buildRenderableTimeline } from "./utils/timelineReader";
 import React from "react";
+import { computeSLA } from "./utils/slaEngine";
+
+const getCanonicalUserRole = (user) => {
+  if (!user) return null;
+  return normalizeRole(user.team) || normalizeRole(user.role);
+};
+
+const eligiblePIRRoles = ["soc_manager", "soc_l2", "ir", "threat_hunter", "admin"];
 
 /* ---------- SLA HELPERS (reused from Analyst Console) ---------- */
 
@@ -41,14 +55,9 @@ function hoursSince(ts) {
 }
 
 function getSlaFlag(issue) {
-  if (issue.status === "open") {
-    const openedAt = issue.statusHistory?.[0]?.at;
-    if (openedAt && hoursSince(openedAt) > 24) return "delayed";
-  }
-  if (issue.status === "assigned") {
-    const assigned = issue.statusHistory?.find((h) => h.status === "assigned");
-    if (assigned && hoursSince(assigned.at) > 48) return "overdue";
-  }
+  const sla = computeSLA(issue);
+  if (sla.status === "breached") return "overdue";
+  if (sla.status === "at_risk") return "delayed";
   return "on-time";
 }
 
@@ -73,89 +82,13 @@ function formatTimeAgo(ms) {
   return `${d}d ago`;
 }
 
-const SLA_HOURS = {
-  open: 24,
-  assigned: 48,
-  in_progress: 72
-};
-
 function getSlaDisplay(issue) {
-  const now = Date.now();
-  const createdAtMs = tsToMillis(issue.createdAt);
-
-  if (issue.status === "open") {
-    const deadline = createdAtMs + SLA_HOURS.open * 60 * 60 * 1000;
-    const remaining = deadline - now;
-    if (remaining >= 0) {
-      return {
-        label: `⏱ SLA: ${formatDuration(remaining)} left`,
-        color: "#1b5e20",
-        breached: false
-      };
-    }
-    return {
-      label: `SLA BREACHED: ${formatDuration(remaining)} ago`,
-      color: "#b71c1c",
-      breached: true
-    };
-  }
-
-  if (issue.status === "assigned" || issue.status === "in_progress" || issue.status === "escalation_pending") {
-    const assignedEntry = issue.statusHistory?.find((h) => h.status === "assigned");
-    const assignedAtMs = tsToMillis(assignedEntry?.at) || createdAtMs;
-    const deadline = assignedAtMs + SLA_HOURS.assigned * 60 * 60 * 1000;
-    const remaining = deadline - now;
-    if (remaining >= 0) {
-      return {
-        label: `⏱ SLA: ${formatDuration(remaining)} left`,
-        color: "#1b5e20",
-        breached: false
-      };
-    }
-    return {
-      label: `SLA BREACHED: ${formatDuration(remaining)} ago`,
-      color: "#b71c1c",
-      breached: true
-    };
-  }
-
-  // BUG FIX #18: SLA marks complete for resolved, contained, false_positive
-  if (
-    issue.status === "resolved" ||
-    issue.status === "contained" ||
-    issue.status === "containment_executed" ||
-    issue.status === "false_positive" ||
-    issue.status === "escalation_approved"
-  ) {
-    return { label: "SLA: complete", color: "#0d47a1", breached: false };
-  }
-
-  // Default case for other statuses
-  const assignedEntry = issue.statusHistory?.find((h) => h.status === "assigned");
-  const assignedAtMs = tsToMillis(assignedEntry?.at) || createdAtMs;
-  const deadline = assignedAtMs + SLA_HOURS.assigned * 60 * 60 * 1000;
-  const remaining = deadline - now;
-  if (remaining >= 0) {
-    return {
-      label: `⏱ SLA: ${formatDuration(remaining)} left`,
-      color: "#1b5e20",
-      breached: false
-    };
-  }
+  const sla = computeSLA(issue);
   return {
-    label: `SLA BREACHED: ${formatDuration(remaining)} ago`,
-    color: "#b71c1c",
-    breached: true
+    label: sla.label,
+    color: sla.color,
+    breached: sla.breached
   };
-}
-
-function formatDuration(ms) {
-  const abs = Math.abs(ms);
-  const totalMin = Math.floor(abs / (60 * 1000));
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
 }
 
 /* ---------- UI HELPERS ---------- */
@@ -191,9 +124,9 @@ function urgencyPill(urg) {
 }
 
 const STAFF_OPTIONS = [
-  { value: "soc_l1", label: "SOC Analyst L1" },
-  { value: "soc_l2", label: "SOC Analyst L2" },
-  { value: "incident_response", label: "Incident Response Team" },
+  { value: "soc_l1", label: "SOC L1 Analyst" },
+  { value: "soc_l2", label: "SOC L2 Analyst" },
+  { value: "ir", label: "Incident Response" },
   { value: "threat_hunter", label: "Threat Hunter" },
   { value: "forensics", label: "Digital Forensics" },
   { value: "cloud_security", label: "Cloud Security Team" },
@@ -204,6 +137,7 @@ const STAFF_OPTIONS = [
 function getAnalystDisplayLabel(assignedTo, usersData) {
   // If no assignment, return unassigned
   if (!assignedTo) return "Unassigned";
+  if (assignedTo === "system") return "Auto-Routed";
 
   // Check if we have user data for this UID
   if (usersData && usersData[assignedTo]) {
@@ -215,9 +149,9 @@ function getAnalystDisplayLabel(assignedTo, usersData) {
     // Add role/level information
     if (userData.analystLevel) {
       const levelLabels = {
-        "L1": "L1 Analyst",
-        "L2": "L2 Analyst",
-        "IR": "IR Specialist",
+        "L1": "SOC L1 Analyst",
+        "L2": "SOC L2 Analyst",
+        "IR": "Incident Response",
         "TH": "Threat Hunter"
       };
       displayName += ` (${levelLabels[userData.analystLevel] || userData.analystLevel})`;
@@ -225,7 +159,7 @@ function getAnalystDisplayLabel(assignedTo, usersData) {
       const roleLabels = {
         "admin": "Admin",
         "analyst": "Analyst",
-        "student": "Student"
+        "student": "Reporter"
       };
       displayName += ` (${roleLabels[userData.role] || userData.role})`;
     }
@@ -261,9 +195,9 @@ function generateUserOptions(usersData, currentUserRole) {
     // Add analyst level information
     if (userData.analystLevel) {
       const levelLabels = {
-        "L1": "L1 Analyst",
-        "L2": "L2 Analyst",
-        "IR": "IR Specialist",
+        "L1": "SOC L1 Analyst",
+        "L2": "SOC L2 Analyst",
+        "IR": "Incident Response",
         "TH": "Threat Hunter"
       };
       displayName += ` (${levelLabels[userData.analystLevel] || userData.analystLevel})`;
@@ -271,7 +205,7 @@ function generateUserOptions(usersData, currentUserRole) {
       const roleLabels = {
         "admin": "Admin",
         "analyst": "Analyst",
-        "student": "Student"
+        "student": "Reporter"
       };
       displayName += ` (${roleLabels[userData.role] || userData.role})`;
     }
@@ -370,6 +304,14 @@ class AnalystDashboardErrorBoundary extends React.Component {
 
 export default function AnalystDashboard() {
   const [issues, setIssues] = useState([]);
+
+  // ── Timeline renderer migration: batch fetch from incident_timeline ──
+  const incidentIds = useMemo(() => issues.map(i => i.id).filter(Boolean), [issues]);
+  const timelineDependencyKey = useMemo(() => {
+    return issues.map(i => `${i.id}:${i.status}:${i.updatedAt?.seconds || 0}`).sort().join(",");
+  }, [issues]);
+  const { timelines } = useIncidentTimelines(incidentIds, timelineDependencyKey);
+
   const [currentUser, setCurrentUser] = useState(null);
   const [analystLevel, setAnalystLevel] = useState(null);
   const [analystTeam, setAnalystTeam] = useState(null);
@@ -400,6 +342,7 @@ export default function AnalystDashboard() {
   const normalizedRole = normalizeRole(analystTeam);
   const isL1 = normalizedRole === "soc_l1";
   const isL2 = normalizedRole === "soc_l2";
+  const navigate = useNavigate();
   const isIR = normalizedRole === "ir";
   const isManager = normalizedRole === "soc_manager";
 
@@ -577,7 +520,21 @@ export default function AnalystDashboard() {
       console.log(`🔧 ROLE NORMALIZATION - Raw role: "${analystTeam}" → Normalized: "${normalizedRole}"`);
 
       // Use unified visibility function that checks visibleTo, assignedTo, and escalatedTo
-      const filtered = data.filter(i => isVisibleToRole(i, normalizedRole));
+      let filtered = data.filter(i => isVisibleToRole(i, normalizedRole));
+
+      if (normalizedRole === "soc_l2") {
+        filtered = filtered.filter(i => 
+          (i.pirOwner === auth.currentUser?.uid) ||
+          (i.pirContributors && i.pirContributors.includes(auth.currentUser?.uid)) ||
+          (i.rcaOwner === auth.currentUser?.uid) ||
+          (i.rcaContributors && i.rcaContributors.includes(auth.currentUser?.uid)) ||
+          (i.status !== "false_positive" &&
+           i.status !== "resolved" &&
+           i.status !== "closed" &&
+           i.status !== "threat_hunt" &&
+           !i.isDeleted)
+        );
+      }
 
       console.log(`ROLE: ${normalizedRole}`);
       console.log(`VISIBLE INCIDENTS:`, filtered);
@@ -616,7 +573,20 @@ export default function AnalystDashboard() {
         console.log(`🔧 FALLBACK ROLE NORMALIZATION - Raw role: "${analystTeam}" → Normalized: "${normalizedRole}"`);
 
         // Use unified visibility function for fallback query
-        const filtered = fallbackData.filter(i => isVisibleToRole(i, normalizedRole));
+        let filtered = fallbackData.filter(i => isVisibleToRole(i, normalizedRole));
+        if (normalizedRole === "soc_l2") {
+          filtered = filtered.filter(i => 
+            (i.pirOwner === auth.currentUser?.uid) ||
+            (i.pirContributors && i.pirContributors.includes(auth.currentUser?.uid)) ||
+            (i.rcaOwner === auth.currentUser?.uid) ||
+            (i.rcaContributors && i.rcaContributors.includes(auth.currentUser?.uid)) ||
+            (i.status !== "false_positive" &&
+             i.status !== "resolved" &&
+             i.status !== "closed" &&
+             i.status !== "threat_hunt" &&
+             !i.isDeleted)
+          );
+        }
         setIssues(filtered);
         console.log("🔄 Using fallback query (no compound index required)");
       });
@@ -630,6 +600,10 @@ export default function AnalystDashboard() {
   const escalateIncident = async (issueId) => {
     try {
       const result = await callEscalateIncident(issueId);
+
+      // ── Timeline: escalation requested (fire-and-forget) ──
+      appendEscalationEvent(issueId, TIMELINE_EVENTS.ESCALATION_REQUESTED, normalizedRole || "unknown");
+
       setToast(result.message || "✅ Escalated successfully");
     } catch (err) {
       const msg = err?.message || "Escalation failed";
@@ -690,6 +664,16 @@ export default function AnalystDashboard() {
         }),
         updatedAt: serverTimestamp()
       });
+
+      // ── Timeline: note added (fire-and-forget) ──
+      appendTimelineEvent({
+        incidentId: issueId,
+        eventType: TIMELINE_EVENTS.NOTE_ADDED,
+        actorId: auth.currentUser?.uid,
+        actorRole: normalizedRole || "unknown",
+        metadata: { noteLength: noteText?.length || 0 },
+      });
+
       setNoteText("");
     } catch (err) {
       console.error("Note failed", err);
@@ -712,6 +696,22 @@ export default function AnalystDashboard() {
         urgency: newUrgency,
         updatedAt: serverTimestamp()
       });
+
+      // ── Timeline: severity changed (fire-and-forget) ──
+      appendTimelineEvent({
+        incidentId: issueId,
+        eventType: TIMELINE_EVENTS.SEVERITY_CHANGED,
+        actorId: auth.currentUser?.uid,
+        actorRole: normalizedRole || "unknown",
+        previousState: issue.urgency || null,
+        newState: newUrgency,
+      });
+
+      logLifecycleAudit(issueId, AUDIT_ACTIONS.SEVERITY_CHANGED, normalizedRole || "unknown", {
+        previousState: issue.urgency || null,
+        newState: newUrgency,
+      });
+
       setToast(`✅ Urgency updated to ${newUrgency}`);
     } catch (err) {
       console.error("Severity adjustment failed", err);
@@ -736,6 +736,23 @@ export default function AnalystDashboard() {
       try {
         const note = `Triage marked as ${newStatus}`;
         await callUpdateIncidentStatus(issueId, newStatus, note);
+
+        // ── Timeline: triage decision (fire-and-forget) ──
+        appendTriageLifecycle(issueId, normalizedRole || "unknown", {
+          newStatus,
+        });
+
+        // ── Timeline: threat confirmed (fire-and-forget) ──
+        if (newStatus === "confirmed_threat") {
+          appendThreatConfirmed(issueId, normalizedRole || "unknown", {
+            previousStatus: issue.triageStatus || null,
+          });
+          logLifecycleAudit(issueId, AUDIT_ACTIONS.THREAT_CONFIRMED, normalizedRole || "unknown", {
+            previousState: issue.status || null,
+            newState: "confirmed_threat",
+          });
+        }
+
         setToast(`✅ Triage: ${newStatus}`);
       } catch (err) {
         console.error("Triage status update failed", err);
@@ -750,6 +767,13 @@ export default function AnalystDashboard() {
         triageStatus: newStatus,
         updatedAt: serverTimestamp()
       });
+
+      // ── Timeline: triage updated (fire-and-forget) ──
+      appendTriageLifecycle(issueId, normalizedRole || "unknown", {
+        previousStatus: issue.triageStatus || null,
+        newStatus,
+      });
+
       setToast(`✅ Triage updated to ${newStatus}`);
     } catch (err) {
       console.error("Triage update failed", err);
@@ -772,7 +796,7 @@ export default function AnalystDashboard() {
         status: "containment_pending_approval",
         escalatedTo: "soc_manager",
         assignedTo: null,
-        visibleTo: ["soc_l2", "soc_manager"],
+        visibleTo: getVisibleToForStatus("containment_pending_approval"),
         requestedBy: auth.currentUser?.uid,
         requestedAt: serverTimestamp(),
         containmentRequested: true,
@@ -780,6 +804,18 @@ export default function AnalystDashboard() {
         approvalStatus: "pending",
         updatedAt: serverTimestamp()
       });
+
+      // ── Timeline: containment requested (fire-and-forget) ──
+      appendContainmentEvent(issueId, TIMELINE_EVENTS.CONTAINMENT_REQUESTED, normalizedRole || "soc_l2", {
+        previousStatus: issue.status,
+        newStatus: "containment_pending_approval",
+      });
+
+      logContainmentAudit(issueId, AUDIT_ACTIONS.CONTAINMENT_REQUESTED, normalizedRole || "soc_l2", {
+        previousState: issue.status || null,
+        newState: "containment_pending_approval",
+      });
+
       setToast("🛡️ Containment request submitted to SOC Manager for approval");
     } catch (err) {
       const msg = err?.message || "Containment request failed";
@@ -806,7 +842,22 @@ export default function AnalystDashboard() {
         visibleTo: ["soc_l2", "soc_manager"], // Keep soc_manager visibility for audit trail
         containmentRequested: false,
         approvalStatus: "withdrawn",
+        statusHistory: arrayUnion({
+          status: "in_progress",
+          note: "Containment request withdrawn by analyst",
+          at: Timestamp.now(),
+          by: auth.currentUser?.email || "unknown"
+        }),
         updatedAt: serverTimestamp()
+      });
+      appendTimelineEvent({
+        incidentId: issueId,
+        eventType: TIMELINE_EVENTS.STATUS_CHANGED,
+        actorId: auth.currentUser?.uid || "unknown",
+        actorRole: normalizedRole || "unknown",
+        previousState: "containment_pending_approval",
+        newState: "investigation_l2",
+        metadata: { reason: "Containment request withdrawn by analyst" }
       });
       console.log(`🟠 L2 WITHDRAW REQUEST:`, { issueId, status: "investigation_l2", visibleTo: ["soc_l2", "soc_manager"] });
       setToast("↩️ Request withdrawn — returned to L2 investigation");
@@ -824,7 +875,7 @@ export default function AnalystDashboard() {
     const issue = issueSnap.data();
 
     // Role-based control - only IR can submit
-    if (analystTeam !== "incident_response") {
+    if (normalizeRole(analystTeam) !== "ir") {
       alert("❌ Unauthorized: Only IR team can submit containment actions");
       return;
     }
@@ -844,10 +895,17 @@ export default function AnalystDashboard() {
           timestamp: serverTimestamp()
         },
         managerDecision: null,
-        visibleTo: ["soc_l2", "soc_manager", "ir"], // Always preserve L2 visibility
+        visibleTo: getVisibleToForStatus("containment_action_submitted"),
         updatedAt: serverTimestamp()
       });
-      console.log(`🔴 IR ACTION SUBMITTED:`, { type: action, details, performedBy: auth.currentUser?.uid, visibleTo: ["soc_l2", "soc_manager", "ir"] });
+      console.log(`🔴 IR ACTION SUBMITTED:`, { type: action, details, performedBy: auth.currentUser?.uid, visibleTo: getVisibleToForStatus("containment_action_submitted") });
+
+      // ── Timeline: IR action submitted (fire-and-forget) ──
+      appendIRActionSubmitted(issueId, normalizedRole || "ir", {
+        actionType: action,
+        actionDetails: details,
+      });
+
       setToast(`✅ Containment action submitted for manager review`);
     } catch (err) {
       const msg = err?.message || "Submission failed";
@@ -863,7 +921,7 @@ export default function AnalystDashboard() {
     const issue = issueSnap.data();
 
     // Role-based control - only IR can update actions
-    if (analystTeam !== "incident_response") {
+    if (normalizeRole(analystTeam) !== "ir") {
       alert("❌ Unauthorized: Only IR team can update containment actions");
       return;
     }
@@ -894,30 +952,8 @@ export default function AnalystDashboard() {
 
   // 🔹 1 — Create getSlaWarning Function
   const getSlaWarning = (issue) => {
-    const createdAtMs = issue.createdAt?.toMillis?.() ?? 0;
-    const now = Date.now();
-
-    if (!createdAtMs) return false;
-
-    if (issue.status === "open") {
-      const deadline = createdAtMs + 24 * 60 * 60 * 1000;
-      const remaining = deadline - now;
-      return remaining > 0 && remaining < 2 * 60 * 60 * 1000;
-    }
-
-    if (issue.status === "assigned" || issue.status === "in_progress") {
-      const assignedEntry = issue.statusHistory?.find(
-        (h) => h.status === "assigned"
-      );
-
-      const assignedAtMs = assignedEntry?.at?.toMillis?.() ?? createdAtMs;
-      const deadline = assignedAtMs + 48 * 60 * 60 * 1000;
-      const remaining = deadline - now;
-
-      return remaining > 0 && remaining < 2 * 60 * 60 * 1000;
-    }
-
-    return false;
+    const sla = computeSLA(issue);
+    return sla.atRisk;
   };
 
   // 1. Analyst Workload Panel
@@ -927,7 +963,7 @@ export default function AnalystDashboard() {
     const workload = {};
     // Include incidents assigned to current user's UID OR to their team string
     const teamStrings = {
-      "incident_response": "ir",
+      "ir": "ir",
       "soc_l2": "soc_l2",
       "soc_l1": "soc_l1",
       "threat_hunter": "threat_hunter"
@@ -1132,6 +1168,13 @@ export default function AnalystDashboard() {
       ],
       updatedAt: serverTimestamp()
     });
+
+    appendAssignmentLifecycle(issue.id, normalizedRole || "unknown", {
+      from: issue.assignedTo || null,
+      to: newAnalyst,
+      reason: `Reassigned by ${auth.currentUser?.email}`,
+      isReassign: true
+    });
   };
 
   return (
@@ -1216,9 +1259,28 @@ export default function AnalystDashboard() {
           </div>
         )}
 
-        <h2 style={{ marginBottom: 10 }}>
-          {normalizedRole === "soc_l1" ? "SOC L1 Alert Triage Console" : "SOC Analyst Console"}
-        </h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <h2 style={{ margin: 0 }}>
+            {normalizedRole === "soc_l1" ? "SOC L1 Alert Triage Console" : "SOC Analyst Console"}
+          </h2>
+          {isL2 && (
+            <button
+              onClick={() => navigate("/command-console")}
+              style={{
+                background: "linear-gradient(135deg, #8b5cf6, #06b6d4)",
+                color: "#fff",
+                border: "none",
+                padding: "10px 20px",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              🔬 Launch Investigation Console
+            </button>
+          )}
+        </div>
 
         {/* OVERVIEW STATS */}
         <div className="glass-panel" style={{ padding: 20, marginBottom: 16 }}>
@@ -1446,11 +1508,11 @@ export default function AnalystDashboard() {
                           )}
                         </div>
                         <div style={{ fontSize: 12, marginTop: 6, color: "var(--text-muted)" }}>
-                          {/* � STEP 9 — Add Incident Age for SOC L1 */}
+                          {/* 🔹 STEP 9 — Add Incident Age for SOC L1 */}
                           {isL1 ? (
                             <span>⏱ Reported {getIncidentAge(issue.createdAt)}</span>
                           ) : (
-                            <span>� {issue.location} • 🧠 {issue.category} • 👷 {getAnalystDisplayLabel(issue.assignedTo, usersData)}</span>
+                            <span>📍 {issue.location} • 🧠 {issue.category} • 👤 {getAnalystDisplayLabel(issue.assignedTo, usersData)}</span>
                           )}
                         </div>
 
@@ -1835,8 +1897,8 @@ export default function AnalystDashboard() {
 
                         {isL1 && issue.status !== "resolved" && (
                           <button
-                            onClick={() => addNoteToIssue(issue.id, noteText)}
-                            data-testid="add-note"
+                            onClick={() => addNote(issue.id)}
+                            data-testid="submit-note"
                             style={{
                               marginTop: 6,
                               background: "var(--primary)",
@@ -1876,27 +1938,65 @@ export default function AnalystDashboard() {
                           </div>
                         )}
 
+                        {/* 📋 PIR Workspace Panel */}
+                        <PIRWorkspacePanel
+                          issue={issue}
+                          usersData={usersData}
+                          normalizedRole={normalizedRole}
+                          getAnalystDisplayLabel={getAnalystDisplayLabel}
+                          setToast={setToast}
+                        />
+
+                        {/* 🔍 RCA Workspace Panel */}
+                        <RCAWorkspacePanel
+                          issue={issue}
+                          usersData={usersData}
+                          normalizedRole={normalizedRole}
+                          getAnalystDisplayLabel={getAnalystDisplayLabel}
+                          setToast={setToast}
+                        />
+
+                        {/* 🕵️ Threat Hunt Workspace Panel */}
+                        <ThreatHuntWorkspacePanel
+                          issue={issue}
+                          usersData={usersData}
+                          normalizedRole={normalizedRole}
+                          getAnalystDisplayLabel={getAnalystDisplayLabel}
+                          setToast={setToast}
+                        />
+
                         {/* 🔹 6 — Display Timeline Inside Incident Card */}
-                        {issue.investigationHistory?.length > 0 && (
-                          <div style={{ marginTop: 8, padding: 8, background: "rgba(0,0,0,0.05)", borderRadius: 4 }}>
-                            <b style={{ fontSize: 12, color: "var(--text-main)", marginBottom: 4 }}>🕐 Investigation Timeline</b>
-                            {issue.investigationHistory.map((h, idx) => (
-                              <div key={idx} style={{
-                                fontSize: 12,
-                                color: "var(--text-muted)",
-                                marginBottom: 4,
-                                padding: 4,
-                                background: "rgba(255,255,255,0.03)",
-                                borderRadius: 3,
-                                borderLeft: "2px solid var(--secondary)"
-                              }}>
-                                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 2 }}>
-                                  {h.action} at {new Date(h.at?.seconds * 1000).toLocaleTimeString()}
+                        {(() => {
+                          const renderedTimeline = buildRenderableTimeline(
+                            timelines.get(issue.id),
+                            issue.statusHistory,
+                            "desc",
+                            issue.investigationHistory
+                          );
+                          if (renderedTimeline.length === 0) return null;
+                          return (
+                            <div style={{ marginTop: 8, padding: 8, background: "rgba(0,0,0,0.05)", borderRadius: 4 }}>
+                              <b style={{ fontSize: 12, color: "var(--text-main)", marginBottom: 4 }}>🕐 Investigation Timeline</b>
+                              {renderedTimeline.map((event, idx) => (
+                                <div key={idx} style={{
+                                  fontSize: 12,
+                                  color: "var(--text-muted)",
+                                  marginBottom: 4,
+                                  padding: 4,
+                                  background: "rgba(255,255,255,0.03)",
+                                  borderRadius: 3,
+                                  borderLeft: "2px solid var(--secondary)"
+                                }}>
+                                  <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 2 }}>
+                                    {event.icon} {event.displayLabel} at {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "—"}
+                                    {event.note ? ` — ${event.note}` : ""}
+                                    {event.actor ? <span style={{ opacity: 0.7 }}> (by {event.actor})</span> : ""}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div style={{ textAlign: "right", marginLeft: 12 }}>
                         <div style={{ fontSize: 12, fontWeight: 900, color: getSlaDisplay(issue).color }}>
@@ -1986,22 +2086,32 @@ export default function AnalystDashboard() {
                         {/* 🔹 STEP 5: DYNAMIC INCIDENT ACTIONS */}
                         <div style={{ display: "flex", gap: 6, marginTop: 8, flexDirection: "column" }}>
                           {/* Claim button for unassigned incidents and old staff assignments */}
-                          {(!issue.assignedTo || (issue.assignedTo && ["soc_network", "soc_endpoint", "soc_email", "soc_identity", "soc_l1", "soc_l2", "incident_response", "threat_hunter", "forensics", "cloud_security", "network_security", "soc_netw"].includes(issue.assignedTo))) && issue.status === "open" && issue.status !== "resolved" && (
+                          {(!issue.assignedTo || (issue.assignedTo && ["soc_network", "soc_endpoint", "soc_email", "soc_identity", "soc_l1", "soc_l2", "ir", "threat_hunter", "forensics", "cloud_security", "network_security", "soc_netw"].includes(issue.assignedTo))) && issue.status === "open" && issue.status !== "resolved" && (
                             <button
                               disabled={issue.locked === true}
-                              onClick={() => {
-                                // BUG FIX #10: also update status to "assigned" when claiming
-                                updateDoc(doc(db, "issues", issue.id), {
-                                  assignedTo: auth.currentUser?.uid,
-                                  assignedAt: serverTimestamp(),
-                                  status: "assigned",   // BUG FIX: was missing, incident stayed "open"
-                                  statusHistory: arrayUnion({
-                                    status: "assigned",
-                                    at: Timestamp.now(),
-                                    note: `Claimed by ${auth.currentUser?.email}`
-                                  }),
-                                  updatedAt: serverTimestamp()
-                                });
+                              onClick={async () => {
+                                try {
+                                  // BUG FIX #10: also update status to "assigned" when claiming
+                                  await updateDoc(doc(db, "issues", issue.id), {
+                                    assignedTo: auth.currentUser?.uid,
+                                    assignedAt: serverTimestamp(),
+                                    status: "assigned",   // BUG FIX: was missing, incident stayed "open"
+                                    statusHistory: arrayUnion({
+                                      status: "assigned",
+                                      at: Timestamp.now(),
+                                      note: `Claimed by ${auth.currentUser?.email}`
+                                    }),
+                                    updatedAt: serverTimestamp()
+                                  });
+                                  appendAssignmentLifecycle(issue.id, normalizedRole || "unknown", {
+                                    from: issue.assignedTo || null,
+                                    to: auth.currentUser?.uid,
+                                    reason: `Claimed by ${auth.currentUser?.email}`,
+                                    isReassign: !!issue.assignedTo
+                                  });
+                                } catch (err) {
+                                  console.error("Claim failed:", err);
+                                }
                               }}
                               style={{
                                 background: "var(--success)",
@@ -2129,8 +2239,10 @@ export default function AnalystDashboard() {
                                         await updateDoc(doc(db, "issues", issue.id), {
                                           triageClassification: "phishing",
                                           statusHistory: arrayUnion({
+                                            status: "triage_updated",
                                             note: "Triage classification: phishing",
-                                            at: Timestamp.now()
+                                            at: Timestamp.now(),
+                                            by: auth.currentUser?.email || "unknown"
                                           }),
                                           investigationHistory: arrayUnion({
                                             action: "classified_as_phishing",
@@ -2138,6 +2250,15 @@ export default function AnalystDashboard() {
                                             at: Timestamp.now()
                                           }),
                                           updatedAt: serverTimestamp()
+                                        });
+                                        appendTimelineEvent({
+                                          incidentId: issue.id,
+                                          eventType: TIMELINE_EVENTS.TRIAGE_UPDATED,
+                                          actorId: auth.currentUser?.uid || "unknown",
+                                          actorRole: normalizedRole || "soc_l1",
+                                          previousState: issue.triageClassification || null,
+                                          newState: "phishing",
+                                          metadata: { reason: "Triage classification: phishing" }
                                         });
                                         console.log("Phishing classification successful");
                                       } catch (error) {
@@ -2164,8 +2285,10 @@ export default function AnalystDashboard() {
                                         await updateDoc(doc(db, "issues", issue.id), {
                                           triageClassification: "malware",
                                           statusHistory: arrayUnion({
+                                            status: "triage_updated",
                                             note: "Triage classification: malware",
-                                            at: Timestamp.now()
+                                            at: Timestamp.now(),
+                                            by: auth.currentUser?.email || "unknown"
                                           }),
                                           investigationHistory: arrayUnion({
                                             action: "classified_as_malware",
@@ -2173,6 +2296,15 @@ export default function AnalystDashboard() {
                                             at: Timestamp.now()
                                           }),
                                           updatedAt: serverTimestamp()
+                                        });
+                                        appendTimelineEvent({
+                                          incidentId: issue.id,
+                                          eventType: TIMELINE_EVENTS.TRIAGE_UPDATED,
+                                          actorId: auth.currentUser?.uid || "unknown",
+                                          actorRole: normalizedRole || "soc_l1",
+                                          previousState: issue.triageClassification || null,
+                                          newState: "malware",
+                                          metadata: { reason: "Triage classification: malware" }
                                         });
                                         console.log("Malware classification successful");
                                       } catch (error) {
@@ -2199,8 +2331,10 @@ export default function AnalystDashboard() {
                                         await updateDoc(doc(db, "issues", issue.id), {
                                           triageClassification: "network_attack",
                                           statusHistory: arrayUnion({
+                                            status: "triage_updated",
                                             note: "Triage classification: network attack",
-                                            at: Timestamp.now()
+                                            at: Timestamp.now(),
+                                            by: auth.currentUser?.email || "unknown"
                                           }),
                                           investigationHistory: arrayUnion({
                                             action: "classified_as_network_attack",
@@ -2208,6 +2342,15 @@ export default function AnalystDashboard() {
                                             at: Timestamp.now()
                                           }),
                                           updatedAt: serverTimestamp()
+                                        });
+                                        appendTimelineEvent({
+                                          incidentId: issue.id,
+                                          eventType: TIMELINE_EVENTS.TRIAGE_UPDATED,
+                                          actorId: auth.currentUser?.uid || "unknown",
+                                          actorRole: normalizedRole || "soc_l1",
+                                          previousState: issue.triageClassification || null,
+                                          newState: "network_attack",
+                                          metadata: { reason: "Triage classification: network attack" }
                                         });
                                         console.log("Network attack classification successful");
                                       } catch (error) {
@@ -2234,8 +2377,10 @@ export default function AnalystDashboard() {
                                         await updateDoc(doc(db, "issues", issue.id), {
                                           triageClassification: "suspicious",
                                           statusHistory: arrayUnion({
+                                            status: "triage_updated",
                                             note: "Triage classification: suspicious",
-                                            at: Timestamp.now()
+                                            at: Timestamp.now(),
+                                            by: auth.currentUser?.email || "unknown"
                                           }),
                                           investigationHistory: arrayUnion({
                                             action: "classified_as_suspicious",
@@ -2243,6 +2388,15 @@ export default function AnalystDashboard() {
                                             at: Timestamp.now()
                                           }),
                                           updatedAt: serverTimestamp()
+                                        });
+                                        appendTimelineEvent({
+                                          incidentId: issue.id,
+                                          eventType: TIMELINE_EVENTS.TRIAGE_UPDATED,
+                                          actorId: auth.currentUser?.uid || "unknown",
+                                          actorRole: normalizedRole || "soc_l1",
+                                          previousState: issue.triageClassification || null,
+                                          newState: "suspicious",
+                                          metadata: { reason: "Triage classification: suspicious" }
                                         });
                                         console.log("Suspicious classification successful");
                                       } catch (error) {
@@ -2305,5 +2459,1793 @@ export default function AnalystDashboard() {
         </div>
       </div>
     </AnalystDashboardErrorBoundary>
+  );
+}
+
+// 📋 Post-Incident Review Workspace Sub-Component
+function PIRWorkspacePanel({ issue, usersData, normalizedRole, getAnalystDisplayLabel, setToast }) {
+  const currentUid = auth.currentUser?.uid;
+  const isOwner = issue.pirOwner === currentUid;
+  const isContributor = issue.pirContributors && issue.pirContributors.includes(currentUid);
+  const isManager = normalizedRole === "soc_manager" || normalizedRole === "admin";
+
+  // Only show if tagged for PIR and user is owner, contributor, or manager
+  const showPIR = issue.pirTagged === true && (isOwner || isContributor || isManager);
+  if (!showPIR) return null;
+
+  // Local state for edit forms
+  const [localSummary, setLocalSummary] = useState(issue.pirSummary || "");
+  const [localLessons, setLocalLessons] = useState(issue.pirLessonsLearned || "");
+  const [recommendRCA, setRecommendRCA] = useState(!!issue.recommendRCA);
+  const [activeTab, setActiveTab] = useState("findings");
+
+  // Sync state if issue updates in background
+  useEffect(() => {
+    setLocalSummary(issue.pirSummary || "");
+    setLocalLessons(issue.pirLessonsLearned || "");
+    setRecommendRCA(!!issue.recommendRCA);
+  }, [issue.pirSummary, issue.pirLessonsLearned, issue.recommendRCA]);
+
+  // Action item form state
+  const [actionDesc, setActionDesc] = useState("");
+  const [actionOwner, setActionOwner] = useState("");
+  const [actionPriority, setActionPriority] = useState("medium");
+  const [actionDueDate, setActionDueDate] = useState("");
+
+  const handleStartReview = async () => {
+    try {
+      await callGovernanceAction(issue.id, "START_PIR", { callerRole: normalizedRole });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.PIR_STARTED, normalizedRole || "analyst");
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.PIR_STARTED, normalizedRole || "analyst");
+      setToast("📝 PIR Review started");
+    } catch (err) {
+      alert("Failed to start PIR review: " + err.message);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    try {
+      await updateDoc(doc(db, "issues", issue.id), {
+        pirSummary: localSummary,
+        pirLessonsLearned: localLessons,
+        updatedAt: serverTimestamp()
+      });
+      setToast("💾 Draft findings saved successfully");
+    } catch (err) {
+      alert("Failed to save draft findings: " + err.message);
+    }
+  };
+
+  const handleCompletePIR = async () => {
+    if (!localSummary.trim() || !localLessons.trim()) {
+      alert("Summary and Lessons Learned are required to complete the PIR.");
+      return;
+    }
+    try {
+      await callGovernanceAction(issue.id, "COMPLETE_PIR", {
+        summary: localSummary,
+        lessonsLearned: localLessons,
+        recommendRCA,
+        callerRole: normalizedRole
+      });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.PIR_COMPLETED, normalizedRole || "analyst", { recommendRCA });
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.PIR_COMPLETED, normalizedRole || "analyst", { recommendRCA });
+
+      if (recommendRCA) {
+        appendLifecycleEvent(issue.id, TIMELINE_EVENTS.RCA_RECOMMENDED, normalizedRole || "analyst");
+        logGovernanceAudit(issue.id, AUDIT_ACTIONS.RCA_RECOMMENDED, normalizedRole || "analyst");
+      }
+      
+      setToast("✅ PIR completed successfully");
+    } catch (err) {
+      alert("Failed to complete PIR: " + err.message);
+    }
+  };
+
+  const handleAddActionItem = async (e) => {
+    e.preventDefault();
+    if (!actionDesc.trim() || !actionOwner || !actionDueDate) {
+      alert("Please fill in all action item fields.");
+      return;
+    }
+    try {
+      await callGovernanceAction(issue.id, "ADD_PIR_ACTION_ITEM", {
+        description: actionDesc,
+        owner: actionOwner,
+        dueDate: actionDueDate,
+        priority: actionPriority
+      });
+      setActionDesc("");
+      setActionOwner("");
+      setActionPriority("medium");
+      setActionDueDate("");
+      setToast("➕ Action item added");
+    } catch (err) {
+      alert("Failed to add action item: " + err.message);
+    }
+  };
+
+  const handleCompleteActionItem = async (itemId) => {
+    try {
+      await callGovernanceAction(issue.id, "COMPLETE_PIR_ACTION_ITEM", {
+        actionItemId: itemId
+      });
+      setToast("✔ Action item marked completed");
+    } catch (err) {
+      alert("Failed to complete action item: " + err.message);
+    }
+  };
+
+  const isEditable = issue.pirStatus === "in_progress";
+
+  return (
+    <div style={{
+      marginTop: "12px",
+      padding: "16px",
+      background: "var(--glass-bg)",
+      border: "1px solid var(--glass-border)",
+      borderRadius: "12px",
+      boxShadow: "var(--glass-shadow)",
+      borderLeft: `4px solid ${issue.pirStatus === "completed" ? "var(--success)" : "var(--primary)"}`,
+      textAlign: "left"
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+        <h4 style={{ color: "var(--text-main)", margin: 0, fontSize: "14px" }}>📋 Post-Incident Review (PIR) Workspace</h4>
+        <span style={{
+          background: issue.pirStatus === "completed" ? "var(--success)" : 
+                      issue.pirStatus === "in_progress" ? "var(--primary)" : 
+                      issue.pirStatus === "assigned" ? "var(--warning)" : "var(--text-muted)",
+          color: "#fff",
+          fontSize: "10px",
+          padding: "2px 8px",
+          borderRadius: "12px",
+          fontWeight: "bold"
+        }}>
+          Status: {issue.pirStatus ? issue.pirStatus.toUpperCase() : "PENDING"} {issue.pirApproved ? "(APPROVED)" : ""}
+        </span>
+      </div>
+
+      <div style={{ marginBottom: "10px", fontSize: "12px", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "2px" }}>
+        <div><strong>PIR Owner:</strong> <span style={{ color: "var(--text-main)" }}>{issue.pirOwner ? getAnalystDisplayLabel(issue.pirOwner, usersData) : "Not Assigned"}</span></div>
+        <div>
+          <strong>Contributors:</strong> <span style={{ color: "var(--text-main)" }}>{issue.pirContributors && issue.pirContributors.length > 0
+            ? issue.pirContributors.map(uid => getAnalystDisplayLabel(uid, usersData)).join(", ")
+            : "None"}</span>
+        </div>
+      </div>
+
+      {/* State 1: Assigned (Waiting to start) */}
+      {issue.pirStatus === "assigned" && (
+        <div style={{ marginTop: "8px", textAlign: "center", padding: "12px", background: "rgba(0,0,0,0.2)", borderRadius: "8px", border: "1px solid var(--glass-border)" }}>
+          {isOwner ? (
+            <button
+              onClick={handleStartReview}
+              style={{
+                padding: "8px 16px",
+                background: "var(--primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "8px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                boxShadow: "0 0 10px rgba(6,182,212,0.2)"
+              }}
+            >
+              ▶ Start PIR Review
+            </button>
+          ) : (
+            <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>⏳ Awaiting PIR Owner to start the review.</span>
+          )}
+        </div>
+      )}
+
+      {/* State 2 & 3: In Progress / Completed */}
+      {(issue.pirStatus === "in_progress" || issue.pirStatus === "completed") && (
+        <div style={{ marginTop: "10px" }}>
+          {/* Tab Navigation */}
+          <div style={{ display: "flex", borderBottom: "1px solid var(--glass-border)", marginBottom: "12px", gap: "16px" }}>
+            <button
+              onClick={() => setActiveTab("findings")}
+              style={{
+                background: "none",
+                border: "none",
+                borderBottom: activeTab === "findings" ? "2px solid var(--primary)" : "2px solid transparent",
+                color: activeTab === "findings" ? "var(--text-main)" : "var(--text-muted)",
+                padding: "6px 4px",
+                fontSize: "12px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                outline: "none"
+              }}
+            >
+              📝 Findings & Lessons
+            </button>
+            <button
+              onClick={() => setActiveTab("actionItems")}
+              style={{
+                background: "none",
+                border: "none",
+                borderBottom: activeTab === "actionItems" ? "2px solid var(--primary)" : "2px solid transparent",
+                color: activeTab === "actionItems" ? "var(--text-main)" : "var(--text-muted)",
+                padding: "6px 4px",
+                fontSize: "12px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                outline: "none"
+              }}
+            >
+              🎯 Action Items {issue.pirActionItems && issue.pirActionItems.length > 0 ? `(${issue.pirActionItems.length})` : ""}
+            </button>
+            <button
+              onClick={() => setActiveTab("complete")}
+              style={{
+                background: "none",
+                border: "none",
+                borderBottom: activeTab === "complete" ? "2px solid var(--primary)" : "2px solid transparent",
+                color: activeTab === "complete" ? "var(--text-main)" : "var(--text-muted)",
+                padding: "6px 4px",
+                fontSize: "12px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                outline: "none"
+              }}
+            >
+              ✔ Sign-off & RCA
+            </button>
+          </div>
+
+          {/* Tab 1: Findings, Lessons Learned, Save Draft */}
+          {activeTab === "findings" && (
+            <div>
+              <div style={{ marginBottom: "10px" }}>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "6px" }}>Summary of Findings</label>
+                {isEditable ? (
+                  <textarea
+                    value={localSummary}
+                    onChange={(e) => setLocalSummary(e.target.value)}
+                    placeholder="Detail what happened, impact, timeline key highlights..."
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--glass-border)",
+                      background: "rgba(0, 0, 0, 0.35)",
+                      color: "var(--text-main)",
+                      fontSize: "12px",
+                      minHeight: "80px",
+                      resize: "vertical"
+                    }}
+                  />
+                ) : (
+                  <div style={{ padding: "10px 12px", background: "rgba(0,0,0,0.2)", borderRadius: "8px", border: "1px solid var(--glass-border)", fontSize: "12px", color: "var(--text-muted)", whiteSpace: "pre-wrap" }}>
+                    {issue.pirSummary || "No summary recorded."}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginBottom: "12px" }}>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "6px" }}>Lessons Learned</label>
+                {isEditable ? (
+                  <textarea
+                    value={localLessons}
+                    onChange={(e) => setLocalLessons(e.target.value)}
+                    placeholder="What went well? What failed? What should be improved?"
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--glass-border)",
+                      background: "rgba(0, 0, 0, 0.35)",
+                      color: "var(--text-main)",
+                      fontSize: "12px",
+                      minHeight: "80px",
+                      resize: "vertical"
+                    }}
+                  />
+                ) : (
+                  <div style={{ padding: "10px 12px", background: "rgba(0,0,0,0.2)", borderRadius: "8px", border: "1px solid var(--glass-border)", fontSize: "12px", color: "var(--text-muted)", whiteSpace: "pre-wrap" }}>
+                    {issue.pirLessonsLearned || "No lessons learned recorded."}
+                  </div>
+                )}
+              </div>
+
+              {isEditable && (
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    onClick={handleSaveDraft}
+                    style={{
+                      padding: "8px 16px",
+                      background: "rgba(0,0,0,0.25)",
+                      color: "var(--text-main)",
+                      border: "1px solid var(--glass-border)",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      cursor: "pointer"
+                    }}
+                  >
+                    💾 Save Draft
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tab 2: Existing Action Items & Add Action Item */}
+          {activeTab === "actionItems" && (
+            <div>
+              {/* List */}
+              {issue.pirActionItems && issue.pirActionItems.length > 0 ? (
+                <div style={{ display: "grid", gap: "8px", marginBottom: "12px" }}>
+                  {issue.pirActionItems.map(item => {
+                    const canCheckOff = item.status === "open" && (item.owner === currentUid || isOwner);
+                    return (
+                      <div key={item.id} style={{
+                        padding: "10px 12px",
+                        background: item.status === "completed" ? "rgba(16,185,129,0.06)" : "rgba(0,0,0,0.2)",
+                        borderRadius: "8px",
+                        border: "1px solid var(--glass-border)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        borderLeft: `4px solid ${item.priority === "high" ? "var(--danger)" : item.priority === "medium" ? "var(--warning)" : "var(--primary)"}`
+                      }}>
+                        <div>
+                          <div style={{ fontSize: "12px", fontWeight: "bold", color: "var(--text-main)" }}>{item.description}</div>
+                          <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "3px" }}>
+                            Owner: {getAnalystDisplayLabel(item.owner, usersData)} • Due: {item.dueDate} • Priority: {item.priority.toUpperCase()}
+                          </div>
+                        </div>
+                        <div>
+                          {item.status === "completed" ? (
+                            <span style={{ color: "var(--success)", fontSize: "11px", fontWeight: "bold" }}>✔ Completed</span>
+                          ) : canCheckOff ? (
+                            <button
+                              onClick={() => handleCompleteActionItem(item.id)}
+                              style={{
+                                padding: "4px 8px",
+                                background: "var(--success)",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: "6px",
+                                fontSize: "10px",
+                                fontWeight: "bold",
+                                cursor: "pointer"
+                              }}
+                            >
+                              Mark Done
+                            </button>
+                          ) : (
+                            <span style={{ color: "var(--warning)", fontSize: "11px" }}>⏳ Pending</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "10px" }}>No action items created yet.</div>
+              )}
+
+              {/* Creator Form */}
+              {isEditable && (
+                <form onSubmit={handleAddActionItem} style={{
+                  background: "rgba(0,0,0,0.18)",
+                  border: "1px solid var(--glass-border)",
+                  padding: "12px",
+                  borderRadius: "8px",
+                  display: "grid",
+                  gap: "8px"
+                }}>
+                  <div style={{ fontSize: "11px", fontWeight: "bold", color: "var(--text-muted)" }}>Add New Action Item</div>
+                  <input
+                    type="text"
+                    placeholder="Task description..."
+                    value={actionDesc}
+                    onChange={(e) => setActionDesc(e.target.value)}
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: "6px",
+                      border: "1px solid var(--glass-border)",
+                      background: "rgba(0,0,0,0.35)",
+                      color: "var(--text-main)",
+                      fontSize: "11px"
+                    }}
+                  />
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    <select
+                      value={actionOwner}
+                      onChange={(e) => setActionOwner(e.target.value)}
+                      style={{
+                        flex: 2,
+                        minWidth: "180px",
+                        padding: "8px 10px",
+                        borderRadius: "6px",
+                        border: "1px solid var(--glass-border)",
+                        background: "rgba(0,0,0,0.35)",
+                        color: "var(--text-main)",
+                        fontSize: "12px"
+                      }}
+                    >
+                      <option value="">Assignee...</option>
+                      {Object.entries(usersData)
+                        .filter(([uid, u]) => eligiblePIRRoles.includes(getCanonicalUserRole(u)))
+                        .map(([uid, u]) => (
+                          <option key={uid} value={uid}>
+                            {u.displayName || u.email}
+                          </option>
+                        ))}
+                    </select>
+                    <select
+                      value={actionPriority}
+                      onChange={(e) => setActionPriority(e.target.value)}
+                      style={{
+                        padding: "6px",
+                        borderRadius: "6px",
+                        border: "1px solid var(--glass-border)",
+                        background: "rgba(0,0,0,0.35)",
+                        color: "var(--text-main)",
+                        fontSize: "11px"
+                      }}
+                    >
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                    <input
+                      type="date"
+                      value={actionDueDate}
+                      onChange={(e) => setActionDueDate(e.target.value)}
+                      style={{
+                        padding: "5px 8px",
+                        borderRadius: "6px",
+                        border: "1px solid var(--glass-border)",
+                        background: "rgba(0,0,0,0.35)",
+                        color: "var(--text-main)",
+                        fontSize: "11px"
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    style={{
+                      background: "var(--primary)",
+                      color: "#fff",
+                      border: "none",
+                      padding: "8px",
+                      borderRadius: "6px",
+                      fontSize: "11px",
+                      fontWeight: "bold",
+                      cursor: "pointer"
+                    }}
+                  >
+                    ➕ Add Item
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
+
+          {/* Tab 3: Recommend RCA & Complete PIR Review */}
+          {activeTab === "complete" && (
+            <div>
+              {isEditable ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  {isOwner ? (
+                    <>
+                      <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "var(--text-main)", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={recommendRCA}
+                          onChange={(e) => setRecommendRCA(e.target.checked)}
+                          style={{ cursor: "pointer" }}
+                        />
+                        🚨 Recommend Root Cause Analysis (RCA)
+                      </label>
+                      <button
+                        onClick={handleCompletePIR}
+                        style={{
+                          padding: "10px 16px",
+                          background: "var(--success)",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: "8px",
+                          fontSize: "12px",
+                          fontWeight: "bold",
+                          cursor: "pointer"
+                        }}
+                      >
+                        ✔ Complete PIR Review
+                      </button>
+                    </>
+                  ) : (
+                    <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>⏳ Only the PIR Owner can complete and sign-off this review.</span>
+                  )}
+                </div>
+              ) : (
+                <div style={{ padding: "12px", background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", borderRadius: "8px", fontSize: "12px", color: "var(--success)", display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span>✔ PIR Review Completed by Owner.</span>
+                  {issue.recommendRCA && <span>🚨 RCA Recommended.</span>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 🔍 Root Cause Analysis Workspace Sub-Component
+const RCA_FACTOR_CATEGORIES = ["People", "Process", "Technology", "Configuration", "Policy"];
+const eligibleRCARoles = ["soc_manager", "soc_l2", "ir", "threat_hunter", "admin"];
+
+function RCAWorkspacePanel({ issue, usersData, normalizedRole, getAnalystDisplayLabel, setToast }) {
+  const currentUid = auth.currentUser?.uid;
+  const isOwner = issue.rcaOwner === currentUid;
+  const isContributor = issue.rcaContributors && issue.rcaContributors.includes(currentUid);
+  const isManager = normalizedRole === "soc_manager" || normalizedRole === "admin";
+
+  const showRCA = issue.rcaTagged === true && (isOwner || isContributor || isManager);
+  if (!showRCA) return null;
+
+  const [activeTab, setActiveTab] = useState("rootcause");
+  const [localRootCause, setLocalRootCause] = useState(issue.rootCause || "");
+  const [localTechnicalAnalysis, setLocalTechnicalAnalysis] = useState(issue.technicalAnalysis || "");
+  const [localFactors, setLocalFactors] = useState(issue.contributingFactors || []);
+
+  // Contributing factor form state
+  const [newFactor, setNewFactor] = useState("");
+  const [newFactorCategory, setNewFactorCategory] = useState("Technology");
+
+  // Preventive action form state
+  const [paDesc, setPaDesc] = useState("");
+  const [paOwner, setPaOwner] = useState("");
+  const [paPriority, setPaPriority] = useState("medium");
+  const [paDueDate, setPaDueDate] = useState("");
+
+  // Sync state if issue updates in background
+  useEffect(() => {
+    setLocalRootCause(issue.rootCause || "");
+    setLocalTechnicalAnalysis(issue.technicalAnalysis || "");
+    setLocalFactors(issue.contributingFactors || []);
+  }, [issue.rootCause, issue.technicalAnalysis, issue.contributingFactors]);
+
+  const isEditable = issue.rcaStatus === "in_progress" && !issue.rcaApproved;
+  const isApproved = !!issue.rcaApproved;
+
+  const handleStartRCA = async () => {
+    try {
+      await callGovernanceAction(issue.id, "START_RCA", { callerRole: normalizedRole });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.RCA_STARTED, normalizedRole || "analyst");
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.RCA_STARTED, normalizedRole || "analyst");
+      setToast("📝 RCA started");
+    } catch (err) {
+      alert("Failed to start RCA: " + err.message);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    try {
+      await updateDoc(doc(db, "issues", issue.id), {
+        rootCause: localRootCause,
+        technicalAnalysis: localTechnicalAnalysis,
+        contributingFactors: localFactors,
+        updatedAt: serverTimestamp()
+      });
+      setToast("💾 RCA draft saved successfully");
+    } catch (err) {
+      alert("Failed to save RCA draft: " + err.message);
+    }
+  };
+
+  const handleAddFactor = () => {
+    if (!newFactor.trim()) { alert("Factor description is required."); return; }
+    setLocalFactors([...localFactors, { factor: newFactor.trim(), category: newFactorCategory }]);
+    setNewFactor("");
+  };
+
+  const handleRemoveFactor = (index) => {
+    setLocalFactors(localFactors.filter((_, i) => i !== index));
+  };
+
+  const handleCompleteRCA = async () => {
+    if (!localRootCause.trim()) {
+      alert("Root Cause is required to complete the RCA.");
+      return;
+    }
+    try {
+      await callGovernanceAction(issue.id, "COMPLETE_RCA", {
+        rootCause: localRootCause,
+        contributingFactors: localFactors,
+        technicalAnalysis: localTechnicalAnalysis,
+        callerRole: normalizedRole
+      });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.ROOT_CAUSE_IDENTIFIED, normalizedRole || "analyst", {
+        rootCause: localRootCause.substring(0, 100)
+      });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.RCA_COMPLETED, normalizedRole || "analyst");
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.ROOT_CAUSE_IDENTIFIED, normalizedRole || "analyst", {
+        rootCause: localRootCause.substring(0, 100)
+      });
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.RCA_COMPLETED, normalizedRole || "analyst");
+      setToast("✅ RCA completed successfully");
+    } catch (err) {
+      alert("Failed to complete RCA: " + err.message);
+    }
+  };
+
+  const handleAddPreventiveAction = async (e) => {
+    e.preventDefault();
+    if (!paDesc.trim() || !paOwner || !paDueDate) {
+      alert("Please fill in all preventive action fields.");
+      return;
+    }
+    try {
+      await callGovernanceAction(issue.id, "ADD_RCA_PREVENTIVE_ACTION", {
+        description: paDesc,
+        owner: paOwner,
+        dueDate: paDueDate,
+        priority: paPriority
+      });
+      setPaDesc("");
+      setPaOwner("");
+      setPaPriority("medium");
+      setPaDueDate("");
+      setToast("➕ Preventive action added");
+    } catch (err) {
+      alert("Failed to add preventive action: " + err.message);
+    }
+  };
+
+  const handleCompletePreventiveAction = async (itemId) => {
+    try {
+      await callGovernanceAction(issue.id, "COMPLETE_RCA_PREVENTIVE_ACTION", {
+        actionItemId: itemId
+      });
+      setToast("✔ Preventive action marked completed");
+    } catch (err) {
+      alert("Failed to complete preventive action: " + err.message);
+    }
+  };
+
+  const inputStyle = {
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: "6px",
+    border: "1px solid var(--glass-border)",
+    background: "rgba(0,0,0,0.35)",
+    color: "var(--text-main)",
+    fontSize: "12px",
+    resize: "vertical"
+  };
+
+  const tabBtnStyle = (tabName) => ({
+    background: "none",
+    border: "none",
+    borderBottom: activeTab === tabName ? "2px solid var(--primary)" : "2px solid transparent",
+    color: activeTab === tabName ? "var(--text-main)" : "var(--text-muted)",
+    padding: "6px 4px",
+    fontSize: "12px",
+    fontWeight: "bold",
+    cursor: "pointer",
+    outline: "none"
+  });
+
+  return (
+    <div style={{
+      marginTop: "12px",
+      padding: "16px",
+      background: "var(--glass-bg)",
+      border: "1px solid var(--glass-border)",
+      borderRadius: "12px",
+      boxShadow: "var(--glass-shadow)",
+      borderLeft: `4px solid ${isApproved ? "var(--success)" : issue.rcaStatus === "completed" ? "#f59e0b" : "var(--primary)"}`,
+      textAlign: "left"
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", gap: "6px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <h4 style={{ color: "var(--text-main)", margin: 0, fontSize: "14px" }}>🔍 Root Cause Analysis (RCA) Workspace</h4>
+          {issue.recommendRCA && (
+            <span style={{
+              background: "rgba(239,68,68,0.15)",
+              color: "var(--danger)",
+              fontSize: "9px",
+              padding: "2px 8px",
+              borderRadius: "12px",
+              fontWeight: "bold"
+            }}>
+              🚨 Recommended by PIR
+            </span>
+          )}
+        </div>
+        <span style={{
+          background: isApproved ? "var(--success)" :
+                      issue.rcaStatus === "completed" ? "#f59e0b" :
+                      issue.rcaStatus === "in_progress" ? "var(--primary)" :
+                      issue.rcaStatus === "assigned" ? "var(--warning)" : "var(--text-muted)",
+          color: "#fff",
+          fontSize: "10px",
+          padding: "2px 8px",
+          borderRadius: "12px",
+          fontWeight: "bold"
+        }}>
+          Status: {issue.rcaStatus ? issue.rcaStatus.toUpperCase() : "PENDING"} {isApproved ? "(APPROVED)" : ""}
+        </span>
+      </div>
+
+      <div style={{ marginBottom: "10px", fontSize: "12px", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "2px" }}>
+        <div><strong>RCA Owner:</strong> <span style={{ color: "var(--text-main)" }}>{issue.rcaOwner ? getAnalystDisplayLabel(issue.rcaOwner, usersData) : "Not Assigned"}</span></div>
+        <div>
+          <strong>Contributors:</strong> <span style={{ color: "var(--text-main)" }}>{issue.rcaContributors && issue.rcaContributors.length > 0
+            ? issue.rcaContributors.map(uid => getAnalystDisplayLabel(uid, usersData)).join(", ")
+            : "None"}</span>
+        </div>
+      </div>
+
+      {/* State 1: Assigned (Waiting to start) */}
+      {issue.rcaStatus === "assigned" && (
+        <div style={{ marginTop: "8px", textAlign: "center", padding: "12px", background: "rgba(0,0,0,0.2)", borderRadius: "8px", border: "1px solid var(--glass-border)" }}>
+          {isOwner ? (
+            <button
+              onClick={handleStartRCA}
+              style={{
+                padding: "8px 16px",
+                background: "var(--primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "8px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                boxShadow: "0 0 10px rgba(6,182,212,0.2)"
+              }}
+            >
+              ▶ Start RCA
+            </button>
+          ) : (
+            <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>⏳ Awaiting RCA Owner to start the analysis.</span>
+          )}
+        </div>
+      )}
+
+      {/* State 2 & 3: In Progress / Completed */}
+      {(issue.rcaStatus === "in_progress" || issue.rcaStatus === "completed") && (
+        <div style={{ marginTop: "10px" }}>
+          {/* Tab Navigation */}
+          <div style={{ display: "flex", borderBottom: "1px solid var(--glass-border)", marginBottom: "12px", gap: "16px" }}>
+            <button onClick={() => setActiveTab("rootcause")} style={tabBtnStyle("rootcause")}>
+              🎯 Root Cause & Analysis
+            </button>
+            <button onClick={() => setActiveTab("factors")} style={tabBtnStyle("factors")}>
+              📊 Factors & Actions
+            </button>
+            {!isApproved && (
+              <button onClick={() => setActiveTab("complete")} style={tabBtnStyle("complete")}>
+                ✔ Complete RCA
+              </button>
+            )}
+          </div>
+
+          {/* Tab 1: Root Cause & Technical Analysis */}
+          {activeTab === "rootcause" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div>
+                <label style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginBottom: "4px", fontWeight: "bold" }}>Root Cause</label>
+                {isEditable && (isOwner || isContributor) ? (
+                  <textarea
+                    value={localRootCause}
+                    onChange={(e) => setLocalRootCause(e.target.value)}
+                    rows={4}
+                    placeholder="Describe the root cause of the incident..."
+                    style={inputStyle}
+                  />
+                ) : (
+                  <div style={{ padding: "8px 10px", background: "rgba(0,0,0,0.2)", borderRadius: "6px", border: "1px solid var(--glass-border)", fontSize: "12px", color: "var(--text-muted)", whiteSpace: "pre-wrap" }}>
+                    {issue.rootCause || "Not documented yet."}
+                  </div>
+                )}
+              </div>
+              <div>
+                <label style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginBottom: "4px", fontWeight: "bold" }}>Technical Analysis</label>
+                {isEditable && (isOwner || isContributor) ? (
+                  <textarea
+                    value={localTechnicalAnalysis}
+                    onChange={(e) => setLocalTechnicalAnalysis(e.target.value)}
+                    rows={4}
+                    placeholder="Detailed technical analysis of what happened..."
+                    style={inputStyle}
+                  />
+                ) : (
+                  <div style={{ padding: "8px 10px", background: "rgba(0,0,0,0.2)", borderRadius: "6px", border: "1px solid var(--glass-border)", fontSize: "12px", color: "var(--text-muted)", whiteSpace: "pre-wrap" }}>
+                    {issue.technicalAnalysis || "Not documented yet."}
+                  </div>
+                )}
+              </div>
+              {isEditable && (isOwner || isContributor) && (
+                <button
+                  onClick={handleSaveDraft}
+                  style={{
+                    padding: "8px 16px",
+                    background: "var(--primary)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                    fontWeight: "bold",
+                    cursor: "pointer",
+                    alignSelf: "flex-start"
+                  }}
+                >
+                  💾 Save Draft
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Tab 2: Contributing Factors & Preventive Actions */}
+          {activeTab === "factors" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {/* Contributing Factors Section */}
+              <div>
+                <label style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginBottom: "6px", fontWeight: "bold" }}>Contributing Factors</label>
+                {localFactors.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginBottom: "8px" }}>
+                    {localFactors.map((cf, i) => (
+                      <div key={i} style={{
+                        display: "flex",
+                        gap: "8px",
+                        alignItems: "center",
+                        padding: "6px 8px",
+                        background: "rgba(0,0,0,0.2)",
+                        borderRadius: "6px",
+                        border: "1px solid var(--glass-border)"
+                      }}>
+                        <span style={{
+                          fontSize: "9px",
+                          padding: "1px 6px",
+                          borderRadius: "4px",
+                          background: "rgba(6,182,212,0.15)",
+                          color: "var(--primary)",
+                          fontWeight: "bold",
+                          whiteSpace: "nowrap"
+                        }}>
+                          {cf.category}
+                        </span>
+                        <span style={{ color: "var(--text-main)", fontSize: "12px", flex: 1 }}>{cf.factor}</span>
+                        {isEditable && !isApproved && (isOwner || isContributor) && (
+                          <button
+                            onClick={() => handleRemoveFactor(i)}
+                            style={{
+                              background: "rgba(239,68,68,0.15)",
+                              color: "var(--danger)",
+                              border: "none",
+                              borderRadius: "4px",
+                              fontSize: "10px",
+                              padding: "2px 6px",
+                              cursor: "pointer"
+                            }}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {isEditable && !isApproved && (isOwner || isContributor) && (
+                  <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                    <input
+                      type="text"
+                      value={newFactor}
+                      onChange={(e) => setNewFactor(e.target.value)}
+                      placeholder="Contributing factor..."
+                      style={{ ...inputStyle, flex: 2, minWidth: "160px", width: "auto" }}
+                    />
+                    <select
+                      value={newFactorCategory}
+                      onChange={(e) => setNewFactorCategory(e.target.value)}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: "6px",
+                        border: "1px solid var(--glass-border)",
+                        background: "rgba(0,0,0,0.35)",
+                        color: "var(--text-main)",
+                        fontSize: "12px"
+                      }}
+                    >
+                      {RCA_FACTOR_CATEGORIES.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleAddFactor}
+                      style={{
+                        padding: "8px 12px",
+                        background: "var(--primary)",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: "6px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap"
+                      }}
+                    >
+                      ➕ Add Factor
+                    </button>
+                  </div>
+                )}
+
+                {isEditable && !isApproved && localFactors.length > 0 && (isOwner || isContributor) && (
+                  <button
+                    onClick={handleSaveDraft}
+                    style={{
+                      marginTop: "8px",
+                      padding: "6px 12px",
+                      background: "var(--primary)",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "6px",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      alignSelf: "flex-start"
+                    }}
+                  >
+                    💾 Save Factors
+                  </button>
+                )}
+              </div>
+
+              {/* Preventive Actions Section */}
+              <div>
+                <label style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginBottom: "6px", fontWeight: "bold" }}>Preventive Actions</label>
+
+                {/* Existing actions list */}
+                {issue.rcaPreventiveActions && issue.rcaPreventiveActions.length > 0 && (
+                  <div style={{ display: "grid", gap: "6px", marginBottom: "10px" }}>
+                    {issue.rcaPreventiveActions.map(item => (
+                      <div key={item.id} style={{
+                        padding: "8px 10px",
+                        background: item.status === "completed" ? "rgba(16,185,129,0.06)" : "rgba(0, 0, 0, 0.2)",
+                        borderRadius: "8px",
+                        border: "1px solid var(--glass-border)",
+                        borderLeft: `4px solid ${item.priority === "high" ? "var(--danger)" : item.priority === "medium" ? "var(--warning)" : "var(--primary)"}`
+                      }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <strong style={{ color: "var(--text-main)", fontSize: "12px" }}>{item.description}</strong>
+                          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                            <span style={{
+                              fontSize: "10px",
+                              padding: "1px 6px",
+                              borderRadius: "4px",
+                              background: item.priority === "high" ? "rgba(239,68,68,0.15)" : item.priority === "medium" ? "rgba(245,158,11,0.15)" : "rgba(6,182,212,0.15)",
+                              color: item.priority === "high" ? "var(--danger)" : item.priority === "medium" ? "var(--warning)" : "var(--primary)",
+                              fontWeight: "bold"
+                            }}>
+                              {item.priority.toUpperCase()}
+                            </span>
+                            {item.status !== "completed" && !isApproved && (isOwner || isManager) && (
+                              <button
+                                onClick={() => handleCompletePreventiveAction(item.id)}
+                                style={{
+                                  background: "var(--success)",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: "4px",
+                                  fontSize: "10px",
+                                  padding: "2px 6px",
+                                  cursor: "pointer"
+                                }}
+                              >
+                                ✔ Done
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "4px" }}>
+                          Owner: {getAnalystDisplayLabel(item.owner, usersData)} • Due: {item.dueDate} • Status: <strong style={{ color: item.status === "completed" ? "var(--success)" : "var(--warning)" }}>{item.status.toUpperCase()}</strong>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add new preventive action form */}
+                {!isApproved && (isOwner || isContributor || isManager) && (
+                  <form onSubmit={handleAddPreventiveAction} style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
+                    padding: "10px",
+                    background: "rgba(0,0,0,0.15)",
+                    borderRadius: "8px",
+                    border: "1px solid var(--glass-border)"
+                  }}>
+                    <input
+                      type="text"
+                      value={paDesc}
+                      onChange={(e) => setPaDesc(e.target.value)}
+                      placeholder="Preventive action description..."
+                      style={{ ...inputStyle, fontSize: "11px" }}
+                    />
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <select
+                        value={paOwner}
+                        onChange={(e) => setPaOwner(e.target.value)}
+                        style={{
+                          flex: 2,
+                          minWidth: "180px",
+                          padding: "8px 10px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--glass-border)",
+                          background: "rgba(0,0,0,0.35)",
+                          color: "var(--text-main)",
+                          fontSize: "12px"
+                        }}
+                      >
+                        <option value="">Assignee...</option>
+                        {Object.entries(usersData)
+                          .filter(([uid, u]) => eligibleRCARoles.includes(getCanonicalUserRole(u)))
+                          .map(([uid, u]) => (
+                            <option key={uid} value={uid}>
+                              {u.displayName || u.email}
+                            </option>
+                          ))}
+                      </select>
+                      <select
+                        value={paPriority}
+                        onChange={(e) => setPaPriority(e.target.value)}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--glass-border)",
+                          background: "rgba(0,0,0,0.35)",
+                          color: "var(--text-main)",
+                          fontSize: "12px"
+                        }}
+                      >
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                      </select>
+                      <input
+                        type="date"
+                        value={paDueDate}
+                        onChange={(e) => setPaDueDate(e.target.value)}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--glass-border)",
+                          background: "rgba(0,0,0,0.35)",
+                          color: "var(--text-main)",
+                          fontSize: "11px"
+                        }}
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      style={{
+                        padding: "8px 12px",
+                        background: "var(--primary)",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: "6px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        alignSelf: "flex-start"
+                      }}
+                    >
+                      ➕ Add Action
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Tab 3: Complete RCA */}
+          {activeTab === "complete" && (
+            <div>
+              {isEditable ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  {isOwner ? (
+                    <button
+                      onClick={handleCompleteRCA}
+                      style={{
+                        padding: "10px 16px",
+                        background: "var(--success)",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: "8px",
+                        fontSize: "12px",
+                        fontWeight: "bold",
+                        cursor: "pointer"
+                      }}
+                    >
+                      ✔ Complete RCA
+                    </button>
+                  ) : (
+                    <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>⏳ Only the RCA Owner can complete and sign-off this analysis.</span>
+                  )}
+                </div>
+              ) : (
+                <div style={{ padding: "12px", background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", borderRadius: "8px", fontSize: "12px", color: "var(--success)", display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span>✔ RCA Completed by Owner.</span>
+                  {isApproved && <span>✔ Approved by Manager.</span>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 🕵️ Threat Hunting Workspace Sub-Component
+function ThreatHuntWorkspacePanel({ issue, usersData, normalizedRole, getAnalystDisplayLabel, setToast }) {
+  const currentUid = auth.currentUser?.uid;
+  const isHunter = normalizedRole === "threat_hunter";
+  const isManager = normalizedRole === "soc_manager" || normalizedRole === "admin";
+  const isAuthorized = isHunter || isManager;
+
+  const showHunt = isAuthorized && (
+    issue.status === "threat_hunt" ||
+    issue.huntStatus === "in_progress" ||
+    issue.huntStatus === "submitted" ||
+    issue.huntStatus === "approved" ||
+    issue.huntStatus === "completed"
+  );
+  if (!showHunt) return null;
+
+  const isEditable = issue.huntStatus === "in_progress";
+  const isSubmitted = issue.huntStatus === "submitted";
+  const isApproved = issue.huntStatus === "approved" || issue.huntStatus === "completed";
+
+  const [activeTab, setActiveTab] = useState("details");
+  const [localNotes, setLocalNotes] = useState(issue.huntNotes || "");
+  const [localFindings, setLocalFindings] = useState(issue.huntFindings || "");
+  const [localRecommendation, setLocalRecommendation] = useState(issue.huntRecommendation || "");
+
+  const [newTechId, setNewTechId] = useState("");
+  const [newTechName, setNewTechName] = useState("");
+  const [completeOption, setCompleteOption] = useState(issue.huntCompleteOption || "return_l2");
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [showRejectionForm, setShowRejectionForm] = useState(false);
+
+  // Sync state if issue updates in background
+  useEffect(() => {
+    setLocalNotes(issue.huntNotes || "");
+    setLocalFindings(issue.huntFindings || "");
+    setLocalRecommendation(issue.huntRecommendation || "");
+    if (issue.huntCompleteOption) {
+      setCompleteOption(issue.huntCompleteOption);
+    }
+  }, [issue.huntNotes, issue.huntFindings, issue.huntRecommendation, issue.huntCompleteOption]);
+
+  const handleStartHunt = async () => {
+    try {
+      await callGovernanceAction(issue.id, "START_HUNT", { callerRole: normalizedRole });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.THREAT_HUNT_STARTED, normalizedRole || "analyst");
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.THREAT_HUNT_STARTED, normalizedRole || "analyst");
+      setToast("🕵️ Threat Hunt started");
+    } catch (err) {
+      alert("Failed to start Threat Hunt: " + err.message);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    try {
+      await callGovernanceAction(issue.id, "SAVE_HUNT_DRAFT", {
+        notes: localNotes,
+        findings: localFindings,
+        recommendation: localRecommendation,
+        callerRole: normalizedRole
+      });
+      setToast("💾 Threat Hunt draft saved");
+    } catch (err) {
+      alert("Failed to save draft: " + err.message);
+    }
+  };
+
+  const handleMapTechnique = async (e) => {
+    e.preventDefault();
+    if (!newTechId.trim() || !newTechName.trim()) {
+      alert("Technique ID and Name are required");
+      return;
+    }
+    try {
+      await callGovernanceAction(issue.id, "MAP_ATTACK_TECHNIQUE", {
+        techniqueId: newTechId.trim(),
+        techniqueName: newTechName.trim(),
+        callerRole: normalizedRole
+      });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.ATTACK_TECHNIQUE_MAPPED, normalizedRole || "analyst", {
+        metadata: { techniqueId: newTechId.trim(), techniqueName: newTechName.trim() }
+      });
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.ATTACK_TECHNIQUE_MAPPED, normalizedRole || "analyst", {
+        techniqueId: newTechId.trim(),
+        techniqueName: newTechName.trim()
+      });
+      setNewTechId("");
+      setNewTechName("");
+      setToast("🎯 MITRE ATT&CK technique mapped");
+    } catch (err) {
+      alert("Failed to map technique: " + err.message);
+    }
+  };
+
+  const handleUnmapTechnique = async (techId) => {
+    try {
+      await callGovernanceAction(issue.id, "UNMAP_ATTACK_TECHNIQUE", {
+        techniqueId: techId,
+        callerRole: normalizedRole
+      });
+      setToast("❌ MITRE ATT&CK technique unmapped");
+    } catch (err) {
+      alert("Failed to unmap technique: " + err.message);
+    }
+  };
+
+  const handleSubmitHunt = async () => {
+    if (!localNotes.trim() || !localFindings.trim() || !localRecommendation.trim()) {
+      alert("Notes, Findings, and Recommendation are required to submit the hunt.");
+      return;
+    }
+    try {
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.HUNT_RECOMMENDATION_SUBMITTED, normalizedRole || "analyst", {
+        metadata: { recommendation: localRecommendation }
+      });
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.HUNT_RECOMMENDATION_SUBMITTED, normalizedRole || "analyst", {
+        recommendation: localRecommendation
+      });
+
+      await callGovernanceAction(issue.id, "SUBMIT_HUNT", {
+        option: completeOption,
+        notes: localNotes,
+        findings: localFindings,
+        recommendation: localRecommendation,
+        callerRole: normalizedRole
+      });
+
+      setToast("📝 Threat Hunt submitted for review");
+    } catch (err) {
+      alert("Failed to submit Threat Hunt: " + err.message);
+    }
+  };
+
+  const handleApproveHunt = async () => {
+    try {
+      await callGovernanceAction(issue.id, "APPROVE_HUNT", {
+        callerRole: normalizedRole
+      });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.THREAT_HUNT_APPROVED, normalizedRole || "soc_manager");
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.THREAT_HUNT_APPROVED, normalizedRole || "soc_manager");
+
+      const option = issue.huntCompleteOption || completeOption;
+      if (option === "return_l2") {
+        appendLifecycleEvent(issue.id, TIMELINE_EVENTS.THREAT_HUNT_RETURNED, normalizedRole || "soc_manager");
+        logGovernanceAudit(issue.id, AUDIT_ACTIONS.THREAT_HUNT_RETURNED, normalizedRole || "soc_manager");
+      } else {
+        appendLifecycleEvent(issue.id, TIMELINE_EVENTS.THREAT_HUNT_COMPLETED, normalizedRole || "soc_manager");
+        logGovernanceAudit(issue.id, AUDIT_ACTIONS.THREAT_HUNT_COMPLETED, normalizedRole || "soc_manager");
+      }
+      setToast("✔ Threat Hunt approved");
+    } catch (err) {
+      alert("Failed to approve Threat Hunt: " + err.message);
+    }
+  };
+
+  const handleRejectHunt = async () => {
+    if (!rejectionReason.trim()) {
+      alert("A reason is required to reject the Threat Hunt.");
+      return;
+    }
+    try {
+      await callGovernanceAction(issue.id, "REJECT_HUNT", {
+        reason: rejectionReason,
+        callerRole: normalizedRole
+      });
+      appendLifecycleEvent(issue.id, TIMELINE_EVENTS.THREAT_HUNT_REJECTED, normalizedRole || "soc_manager", {
+        reason: rejectionReason
+      });
+      logGovernanceAudit(issue.id, AUDIT_ACTIONS.THREAT_HUNT_REJECTED, normalizedRole || "soc_manager", {
+        reason: rejectionReason
+      });
+      setRejectionReason("");
+      setShowRejectionForm(false);
+      setToast("❌ Threat Hunt rejected");
+    } catch (err) {
+      alert("Failed to reject Threat Hunt: " + err.message);
+    }
+  };
+
+  const tabStyle = (tabName) => ({
+    padding: "6px 12px",
+    background: activeTab === tabName ? "var(--primary)" : "transparent",
+    color: "#fff",
+    border: "none",
+    borderRadius: "4px",
+    fontSize: "12px",
+    fontWeight: "bold",
+    cursor: "pointer",
+    outline: "none"
+  });
+
+  return (
+    <div style={{
+      marginTop: "12px",
+      padding: "16px",
+      background: "var(--glass-bg)",
+      border: "1px solid var(--glass-border)",
+      borderRadius: "12px",
+      boxShadow: "var(--glass-shadow)",
+      borderLeft: `4px solid ${isApproved ? "var(--success)" : isSubmitted ? "#f59e0b" : "var(--primary)"}`,
+      textAlign: "left"
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", gap: "6px" }}>
+        <h4 style={{ color: "var(--text-main)", margin: 0, fontSize: "14px" }}>🕵️ Threat Hunting Workspace</h4>
+        <span style={{
+          background: isApproved ? "var(--success)" : isSubmitted ? "#f59e0b" : "var(--primary)",
+          color: "#fff",
+          fontSize: "10px",
+          padding: "2px 8px",
+          borderRadius: "12px",
+          fontWeight: "bold"
+        }}>
+          {issue.huntStatus ? issue.huntStatus.toUpperCase() : "PENDING"}
+        </span>
+      </div>
+
+      {issue.huntRejectionReason && isEditable && (
+        <div style={{
+          marginBottom: "12px",
+          padding: "10px",
+          background: "rgba(239, 68, 68, 0.1)",
+          border: "1px solid rgba(239, 68, 68, 0.3)",
+          borderRadius: "6px",
+          fontSize: "12px",
+          color: "var(--danger)"
+        }}>
+          <strong>❌ Threat Hunt Rejected:</strong> {issue.huntRejectionReason}
+        </div>
+      )}
+
+      {(!issue.huntStatus || issue.huntStatus === "pending") ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px", alignItems: "flex-start" }}>
+          <p style={{ margin: 0, fontSize: "12px", color: "var(--text-muted)" }}>
+            Incident is tagged for proactive Threat Hunting. Start the hunt to begin logging notes, mapping ATT&CK techniques, and submitting recommendations.
+          </p>
+          <button
+            onClick={handleStartHunt}
+            style={{
+              padding: "8px 14px",
+              background: "var(--primary)",
+              color: "#fff",
+              border: "none",
+              borderRadius: "6px",
+              fontSize: "12px",
+              fontWeight: "600",
+              cursor: "pointer"
+            }}
+          >
+            🕵️ Start Threat Hunt
+          </button>
+        </div>
+      ) : (
+        <div>
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: "6px", borderBottom: "1px solid var(--glass-border)", paddingBottom: "8px", marginBottom: "12px" }}>
+            <button onClick={() => setActiveTab("details")} style={tabStyle("details")}>Notes & Findings</button>
+            <button onClick={() => setActiveTab("attack")} style={tabStyle("attack")}>MITRE ATT&CK</button>
+            <button onClick={() => setActiveTab("complete")} style={tabStyle("complete")}>Complete & Review</button>
+          </div>
+
+          {/* Tab 1: Notes & Findings */}
+          {activeTab === "details" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "4px" }}>Hunt Notes</label>
+                <textarea
+                  placeholder="Record investigation notes, observed indicators, and analysis..."
+                  value={localNotes}
+                  onChange={(e) => setLocalNotes(e.target.value)}
+                  disabled={!isEditable}
+                  style={{
+                    width: "100%",
+                    minHeight: "80px",
+                    padding: "8px",
+                    borderRadius: "6px",
+                    border: "1px solid var(--glass-border)",
+                    background: "rgba(0,0,0,0.2)",
+                    color: "var(--text-main)",
+                    fontSize: "12px",
+                    resize: "vertical"
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "4px" }}>Hunt Findings</label>
+                <textarea
+                  placeholder="Document threat hunt findings..."
+                  value={localFindings}
+                  onChange={(e) => setLocalFindings(e.target.value)}
+                  disabled={!isEditable}
+                  style={{
+                    width: "100%",
+                    minHeight: "80px",
+                    padding: "8px",
+                    borderRadius: "6px",
+                    border: "1px solid var(--glass-border)",
+                    background: "rgba(0,0,0,0.2)",
+                    color: "var(--text-main)",
+                    fontSize: "12px",
+                    resize: "vertical"
+                  }}
+                />
+              </div>
+              {isEditable && (
+                <button
+                  onClick={handleSaveDraft}
+                  style={{
+                    alignSelf: "flex-start",
+                    padding: "8px 12px",
+                    background: "var(--secondary)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "6px",
+                    fontSize: "11px",
+                    fontWeight: "600",
+                    cursor: "pointer"
+                  }}
+                >
+                  💾 Save Draft
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Tab 2: MITRE ATT&CK Mapping */}
+          {activeTab === "attack" && (
+            <div>
+              {isEditable && (
+                <form onSubmit={handleMapTechnique} style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "12px" }}>
+                  <input
+                    type="text"
+                    placeholder="Technique ID (e.g. T1566)"
+                    value={newTechId}
+                    onChange={(e) => setNewTechId(e.target.value)}
+                    style={{
+                      flex: 1,
+                      minWidth: "120px",
+                      padding: "8px 10px",
+                      borderRadius: "6px",
+                      border: "1px solid var(--glass-border)",
+                      background: "rgba(0,0,0,0.35)",
+                      color: "var(--text-main)",
+                      fontSize: "12px"
+                    }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Technique Name (e.g. Phishing)"
+                    value={newTechName}
+                    onChange={(e) => setNewTechName(e.target.value)}
+                    style={{
+                      flex: 2,
+                      minWidth: "180px",
+                      padding: "8px 10px",
+                      borderRadius: "6px",
+                      border: "1px solid var(--glass-border)",
+                      background: "rgba(0,0,0,0.35)",
+                      color: "var(--text-main)",
+                      fontSize: "12px"
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    style={{
+                      padding: "8px 12px",
+                      background: "var(--primary)",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "6px",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      cursor: "pointer"
+                    }}
+                  >
+                    🎯 Map
+                  </button>
+                </form>
+              )}
+
+              <div style={{ marginTop: "10px" }}>
+                <h5 style={{ color: "var(--text-main)", margin: "0 0 6px 0", fontSize: "12px" }}>Mapped Techniques</h5>
+                {(!issue.attackTechniques || issue.attackTechniques.length === 0) ? (
+                  <p style={{ margin: 0, fontSize: "11px", color: "var(--text-muted)" }}>No techniques mapped yet.</p>
+                ) : (
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                    {issue.attackTechniques.map((tech, idx) => (
+                      <div key={idx} style={{
+                        background: "rgba(63, 81, 181, 0.2)",
+                        border: "1px solid rgba(63, 81, 181, 0.4)",
+                        borderRadius: "4px",
+                        padding: "4px 8px",
+                        fontSize: "11px",
+                        color: "var(--text-main)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px"
+                      }}>
+                        <span style={{ fontWeight: "bold", color: "#7986cb" }}>{tech.techniqueId}</span>
+                        <span>{tech.techniqueName}</span>
+                        {isEditable && (
+                          <button
+                            onClick={() => handleUnmapTechnique(tech.techniqueId)}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--danger)",
+                              cursor: "pointer",
+                              padding: "0 0 0 6px",
+                              fontSize: "12px",
+                              fontWeight: "bold",
+                              lineHeight: "1"
+                            }}
+                            title="Remove technique"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Tab 3: Complete & Review */}
+          {activeTab === "complete" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {isApproved && (
+                <div style={{ padding: "12px", background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", borderRadius: "8px", fontSize: "12px", color: "var(--success)" }}>
+                  ✔ Threat Hunt Approved by {getAnalystDisplayLabel(issue.huntApprovedBy, usersData)}.
+                </div>
+              )}
+
+              {isEditable && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: "11px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "4px" }}>Threat Hunter Recommendation</label>
+                    <textarea
+                      placeholder="e.g. Escalate back to L2 for containment review or No malicious activity identified..."
+                      value={localRecommendation}
+                      onChange={(e) => setLocalRecommendation(e.target.value)}
+                      style={{
+                        width: "100%",
+                        minHeight: "60px",
+                        padding: "8px",
+                        borderRadius: "6px",
+                        border: "1px solid var(--glass-border)",
+                        background: "rgba(0,0,0,0.2)",
+                        color: "var(--text-main)",
+                        fontSize: "12px",
+                        resize: "vertical"
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: "block", fontSize: "11px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "4px" }}>Action Option</label>
+                    <div style={{ display: "flex", gap: "12px", fontSize: "12px", color: "var(--text-main)" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="completeOption"
+                          value="return_l2"
+                          checked={completeOption === "return_l2"}
+                          onChange={() => setCompleteOption("return_l2")}
+                        />
+                        Option A: Return To L2
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="completeOption"
+                          value="close"
+                          checked={completeOption === "close"}
+                          onChange={() => setCompleteOption("close")}
+                        />
+                        Option B: Close Hunt
+                      </label>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleSubmitHunt}
+                    style={{
+                      alignSelf: "flex-start",
+                      padding: "8px 14px",
+                      background: "var(--primary)",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "6px",
+                      fontSize: "12px",
+                      fontWeight: "bold",
+                      cursor: "pointer"
+                    }}
+                  >
+                    🚀 Submit Threat Hunt
+                  </button>
+                </div>
+              )}
+
+              {isSubmitted && !isManager && (
+                <div style={{ padding: "12px", background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)", borderRadius: "8px", fontSize: "12px", color: "var(--warning)" }}>
+                  ⏳ Threat Hunt Recommendation Submitted. Awaiting Manager Approval.
+                  <div style={{ marginTop: "10px" }}>
+                    <strong>Selected Option:</strong> {issue.huntCompleteOption === "return_l2" ? "Option A: Return To L2" : "Option B: Close Hunt"}
+                  </div>
+                  <div style={{ marginTop: "6px" }}>
+                    <strong>Recommendation:</strong>
+                    <pre style={{ margin: "4px 0 0 0", padding: "8px", background: "rgba(0,0,0,0.15)", borderRadius: "4px", fontSize: "11px", color: "var(--text-muted)", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
+                      {issue.huntRecommendation || "N/A"}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {isSubmitted && isManager && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div style={{ padding: "12px", background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)", borderRadius: "8px", fontSize: "12px", color: "var(--warning)" }}>
+                    📢 <strong>Manager Review Required:</strong> A Threat Hunt recommendation has been submitted.
+                  </div>
+
+                  <div style={{ fontSize: "12px", color: "var(--text-main)", display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <div>
+                      <strong>Proposed Option:</strong> {issue.huntCompleteOption === "return_l2" ? "Option A: Return To L2" : "Option B: Close Hunt"}
+                    </div>
+                    <div>
+                      <strong>Notes:</strong>
+                      <pre style={{ margin: "4px 0 0 0", padding: "8px", background: "rgba(0,0,0,0.15)", borderRadius: "4px", fontSize: "11px", color: "var(--text-muted)", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
+                        {issue.huntNotes || "N/A"}
+                      </pre>
+                    </div>
+                    <div>
+                      <strong>Findings:</strong>
+                      <pre style={{ margin: "4px 0 0 0", padding: "8px", background: "rgba(0,0,0,0.15)", borderRadius: "4px", fontSize: "11px", color: "var(--text-muted)", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
+                        {issue.huntFindings || "N/A"}
+                      </pre>
+                    </div>
+                    <div>
+                      <strong>Recommendation:</strong>
+                      <pre style={{ margin: "4px 0 0 0", padding: "8px", background: "rgba(0,0,0,0.15)", borderRadius: "4px", fontSize: "11px", color: "var(--text-muted)", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
+                        {issue.huntRecommendation || "N/A"}
+                      </pre>
+                    </div>
+                  </div>
+
+                  {!showRejectionForm ? (
+                    <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                      <button
+                        onClick={handleApproveHunt}
+                        style={{
+                          padding: "8px 14px",
+                          background: "var(--success)",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: "6px",
+                          fontSize: "12px",
+                          fontWeight: "bold",
+                          cursor: "pointer"
+                        }}
+                      >
+                        ✔ Approve Hunt
+                      </button>
+                      <button
+                        onClick={() => setShowRejectionForm(true)}
+                        style={{
+                          padding: "8px 14px",
+                          background: "var(--danger)",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: "6px",
+                          fontSize: "12px",
+                          fontWeight: "bold",
+                          cursor: "pointer"
+                        }}
+                      >
+                        ❌ Reject Hunt
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px", padding: "10px", background: "rgba(0,0,0,0.15)", borderRadius: "6px", border: "1px solid var(--glass-border)" }}>
+                      <label style={{ fontSize: "11px", fontWeight: "bold", color: "var(--text-main)" }}>Rejection Reason (Required)</label>
+                      <input
+                        type="text"
+                        placeholder="Please explain why the hunt is rejected..."
+                        value={rejectionReason}
+                        onChange={(e) => setRejectionReason(e.target.value)}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: "4px",
+                          border: "1px solid var(--glass-border)",
+                          background: "rgba(0,0,0,0.3)",
+                          color: "var(--text-main)",
+                          fontSize: "12px"
+                        }}
+                      />
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <button
+                          onClick={handleRejectHunt}
+                          style={{
+                            padding: "6px 10px",
+                            background: "var(--danger)",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "4px",
+                            fontSize: "11px",
+                            fontWeight: "bold",
+                            cursor: "pointer"
+                          }}
+                        >
+                          Confirm Rejection
+                        </button>
+                        <button
+                          onClick={() => { setShowRejectionForm(false); setRejectionReason(""); }}
+                          style={{
+                            padding: "6px 10px",
+                            background: "var(--secondary)",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "4px",
+                            fontSize: "11px",
+                            fontWeight: "bold",
+                            cursor: "pointer"
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {isApproved && (
+                <div style={{ fontSize: "12px", color: "var(--text-main)", display: "flex", flexDirection: "column", gap: "8px" }}>
+                  <div>
+                    <strong>Option Selected & Approved:</strong> {issue.huntCompleteOption === "return_l2" ? "Option A: Return To L2" : "Option B: Close Hunt"}
+                  </div>
+                  <div>
+                    <b>Notes:</b>
+                    <pre style={{ margin: "4px 0 0 0", padding: "8px", background: "rgba(0,0,0,0.15)", borderRadius: "4px", fontSize: "11px", color: "var(--text-muted)", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
+                      {issue.huntNotes || "N/A"}
+                    </pre>
+                  </div>
+                  <div>
+                    <b>Findings:</b>
+                    <pre style={{ margin: "4px 0 0 0", padding: "8px", background: "rgba(0,0,0,0.15)", borderRadius: "4px", fontSize: "11px", color: "var(--text-muted)", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
+                      {issue.huntFindings || "N/A"}
+                    </pre>
+                  </div>
+                  <div>
+                    <b>Recommendation:</b>
+                    <pre style={{ margin: "4px 0 0 0", padding: "8px", background: "rgba(0,0,0,0.15)", borderRadius: "4px", fontSize: "11px", color: "var(--text-muted)", whiteSpace: "pre-wrap", fontFamily: "inherit" }}>
+                      {issue.huntRecommendation || "N/A"}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

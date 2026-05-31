@@ -25,8 +25,31 @@ import {
   exportToJSON,
 } from "../utils/analyticsEngine";
 import { getRiskPill } from "../utils/riskEngine";
+import { hasPermission, PERMISSIONS } from "../security/permissions";
+import { canViewAnalytics } from "../security/policies";
 
 /* ─── ROLE ACCESS MATRIX ─────────────────────────────────────────────────── */
+//
+// PERMISSION MIGRATION (Phase 1): getAccessLevel now checks the centralized
+// permission engine first, then falls back to the legacy ROLE_ACCESS map.
+// This preserves exact existing behavior while beginning adoption of the
+// centralized permission abstraction layer.
+//
+// GOVERNANCE BRIDGE (Phase 2): canViewAnalytics() from the policy registry
+// is wired as an additional OR path. It returns true for exactly the same
+// roles (admin, soc_manager) that hasPermission already grants — this is
+// a compatibility bridge, not a behavior change.
+//
+// Mapping rationale:
+//   VIEW_ANALYTICS + EXPORT_ANALYTICS → "full"   (admin, soc_manager)
+//   VIEW_ANALYTICS only               → "full"   (same roles today)
+//   canViewAnalytics(role)             → "full"   (same roles — policy bridge)
+//   No VIEW_ANALYTICS                 → fallback to ROLE_ACCESS map
+//
+// The ROLE_ACCESS map is retained as a compatibility fallback because the
+// permission engine currently doesn't model the "limited" vs "minimal"
+// access level distinction — those will be added in a future phase.
+// ──────────────────────────────────────────────────────────────────────────
 
 const ROLE_ACCESS = {
   admin:       "full",
@@ -39,6 +62,19 @@ const ROLE_ACCESS = {
 };
 
 function getAccessLevel(role) {
+  // Phase 1 permission engine: check centralized permissions first
+  if (hasPermission(role, PERMISSIONS.VIEW_ANALYTICS)) {
+    return "full";
+  }
+
+  // Phase 2 governance bridge: check policy registry (same roles — compatibility path)
+  if (canViewAnalytics(role)) {
+    return "full";
+  }
+
+  // Compatibility fallback: use legacy ROLE_ACCESS map for roles that
+  // the centralized engine doesn't grant VIEW_ANALYTICS (e.g., soc_l2,
+  // soc_l1, ir — these get "limited" or "minimal" from the legacy map).
   return ROLE_ACCESS[role] || "none";
 }
 
@@ -473,7 +509,11 @@ export default function AnalyticsPanel({ userRole = "analyst" }) {
           </select>
 
           {/* Export */}
-          {accessLevel === "full" && (
+          {/* PERMISSION MIGRATION (Phase 1): Export buttons now check centralized
+              permission engine first, with accessLevel fallback for compatibility.
+              GOVERNANCE BRIDGE (Phase 2): canViewAnalytics() policy bridge added
+              as additional OR path — same roles, parallel authorization path. */}
+          {(hasPermission(userRole, PERMISSIONS.EXPORT_ANALYTICS) || accessLevel === "full" || canViewAnalytics(userRole)) && (
             <>
               <button onClick={handleExportCSV} style={{
                 padding: "8px 14px", borderRadius: 10,

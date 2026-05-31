@@ -25,7 +25,10 @@ import { getAuth } from "firebase/auth";
 import { auth, db, app as firebaseApp } from './firebase';
 import { callUpdateRole, callDeleteUser } from './utils/socFunctions';
 
-import { normalizeRole, isVisibleToRole } from "./utils/roleNormalization";
+import { normalizeRole, isVisibleToRole, getRoleDisplayLabel } from "./utils/roleNormalization";
+import { hasPermission, PERMISSIONS } from "./security/permissions";
+import { logSecurityEvent, AUDIT_ACTIONS, mapLegacyAction } from "./security/auditEngine";
+import { canViewAnalytics, canViewAuditLogs } from "./security/policies";
 
 // Role types mapping for conditional form fields
 const ROLE_TYPES = {
@@ -68,7 +71,7 @@ export default function AdminDashboard() {
   // Role templates for quick setup
   const ROLE_TEMPLATES = {
     soc_l1: {
-      name: "SOC Analyst L1",
+      name: "SOC L1 Analyst",
       enabledModules: ["incident_management"],
       permissions: {
         view_incidents: true,
@@ -77,7 +80,7 @@ export default function AdminDashboard() {
       }
     },
     soc_l2: {
-      name: "SOC Analyst L2",
+      name: "SOC L2 Analyst",
       enabledModules: ["incident_management", "containment"],
       permissions: {
         view_incidents: true,
@@ -284,7 +287,7 @@ export default function AdminDashboard() {
         const defaultRoles = [
           {
             id: 'soc_l1',
-            name: "SOC Analyst L1",
+            name: "SOC L1 Analyst",
             roleId: "soc_l1",
             scope: "unassigned",
             enabledModules: ["incident_management"],
@@ -292,7 +295,7 @@ export default function AdminDashboard() {
           },
           {
             id: 'soc_l2',
-            name: "SOC Analyst L2",
+            name: "SOC L2 Analyst",
             roleId: "soc_l2",
             scope: "escalated",
             enabledModules: ["incident_management", "containment"],
@@ -416,6 +419,15 @@ export default function AdminDashboard() {
         // User is authorized - set states and load data
         setUserRole(userData.role);
         setIsAuthorized(true);
+
+        // ── Audit: dashboard access (fire-and-forget) ──
+        logSecurityEvent({
+          actorId: currentUser.uid,
+          actorRole: normalizeRole(userData.role) || "unknown",
+          action: AUDIT_ACTIONS.DASHBOARD_ACCESS,
+          targetType: "dashboard",
+          metadata: { dashboard: "admin" },
+        });
 
         // Load all dashboard data
         await loadDashboardData();
@@ -605,9 +617,22 @@ export default function AdminDashboard() {
   // (create: false, update: false, delete: false — unconditional).
   // Real audit entries are written server-side by Cloud Functions via Admin SDK.
   // This is now a console-only log for debugging; the actual audit trail comes from CFs.
+  //
+  // AUDIT ENGINE BRIDGE: Also routes through the centralized logSecurityEvent().
+  // The bridge maps legacy action strings to AUDIT_ACTIONS constants.
   const logAuditAction = async (action, targetUser = null) => {
     console.log(`📋 [AUDIT] ${action}`, { performedBy: auth.currentUser?.uid, targetUser });
     // Note: audit_logs collection is immutable from client. Cloud Functions handle real audit writes.
+
+    // ── Bridge to centralized audit engine (fire-and-forget) ──
+    logSecurityEvent({
+      actorId: auth.currentUser?.uid || "unknown",
+      actorRole: normalizeRole(userRole) || "unknown",
+      action: mapLegacyAction(action),
+      targetId: targetUser || null,
+      targetType: "user",
+      metadata: { legacyAction: action },
+    });
   };
 
   const showToast = (message) => {
@@ -893,13 +918,7 @@ export default function AdminDashboard() {
 
   // Helper function to get display name for team
   const getTeamDisplayName = (team) => {
-    switch (team) {
-      case "soc_l1": return "SOC Analyst L1";
-      case "soc_l2": return "SOC Analyst L2";
-      case "incident_response": return "ir";
-      case "threat_hunter": return "threat_hunter";
-      default: return team || "Unassigned";
-    }
+    return getRoleDisplayLabel(team);
   };
 
   // Helper function to get status with default
@@ -974,7 +993,16 @@ export default function AdminDashboard() {
       {/* Navigation Tabs */}
       <div className="glass-panel" style={{ padding: 8, marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 8 }}>
-          {['users', 'roles', 'audit', 'config', 'analytics'].map(tab => (
+          {/* PERMISSION MIGRATION (Phase 1): Analytics tab is now gated by the
+              centralized permission engine. Fallback to normalizeRole check preserves
+              exact existing behavior (admin always had the analytics tab).
+              GOVERNANCE BRIDGE (Phase 2): canViewAnalytics() policy bridge added
+              as additional OR path — same roles, parallel authorization path. */}
+          {['users', 'roles', 'audit', 'config',
+            ...(hasPermission(normalizeRole(userRole), PERMISSIONS.VIEW_ANALYTICS)
+                || normalizeRole(userRole) === 'admin'
+                || canViewAnalytics(normalizeRole(userRole))
+              ? ['analytics'] : [])].map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -1416,7 +1444,7 @@ export default function AdminDashboard() {
                     style={{ width: '100%', padding: "12px", borderRadius: 8 }}
                   >
                     <option value="soc_l2">soc_l2</option>
-                    <option value="incident_response">ir</option>
+                    <option value="ir">Incident Response</option>
                   </select>
                 </div>
               </div>
@@ -1650,10 +1678,10 @@ export default function AdminDashboard() {
                         transition: 'all 0.2s ease'
                       }}
                     >
-                      <option value="soc_l1">soc_l1</option>
-                      <option value="soc_l2">soc_l2</option>
-                      <option value="incident_response">incident_response</option>
-                      <option value="threat_hunter">threat_hunter</option>
+                      <option value="soc_l1">SOC L1 Analyst</option>
+                      <option value="soc_l2">SOC L2 Analyst</option>
+                      <option value="ir">Incident Response</option>
+                      <option value="threat_hunter">Threat Hunter</option>
                     </select>
                   </div>
                 )}
@@ -1859,10 +1887,10 @@ export default function AdminDashboard() {
                         transition: 'all 0.2s ease'
                       }}
                     >
-                      <option value="soc_l1">soc_l1</option>
-                      <option value="soc_l2">soc_l2</option>
-                      <option value="incident_response">ir</option>
-                      <option value="threat_hunter">threat_hunter</option>
+                      <option value="soc_l1">SOC L1 Analyst</option>
+                      <option value="soc_l2">SOC L2 Analyst</option>
+                      <option value="ir">Incident Response</option>
+                      <option value="threat_hunter">Threat Hunter</option>
                     </select>
                   </div>
                 )}
@@ -2101,8 +2129,8 @@ export default function AdminDashboard() {
                     }}
                   >
                     <option value="">Custom</option>
-                    <option value="soc_l1">SOC Analyst L1</option>
-                    <option value="soc_l2">SOC Analyst L2</option>
+                    <option value="soc_l1">SOC L1 Analyst</option>
+                    <option value="soc_l2">SOC L2 Analyst</option>
                     <option value="threat_hunter">Threat Hunter</option>
                     <option value="ir">Incident Response</option>
                     <option value="soc_manager">SOC Manager</option>

@@ -12,8 +12,11 @@ import {
 } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { auth, db } from "./firebase";
+import { useIncidentTimelines } from "./hooks/useIncidentTimelines";
+import { buildRenderableTimeline } from "./utils/timelineReader";
 import { onAuthStateChanged } from "firebase/auth";
-import { normalizeRole, isVisibleToRole, getVisibleToForStatus } from "./utils/roleNormalization";
+import { normalizeRole, isVisibleToRole, getVisibleToForStatus, getRoleDisplayLabel } from "./utils/roleNormalization";
+import { computeSLA } from "./utils/slaEngine";
 import {
   callApproveEscalation,
   callDenyEscalation,
@@ -21,10 +24,33 @@ import {
   callLockIncident,
   callGovernanceAction,
 } from "./utils/socFunctions";
+import {
+  appendEscalationEvent,
+  appendContainmentEvent,
+  appendLifecycleEvent,
+  appendAssignmentLifecycle,
+  appendClosureLifecycle,
+  appendEscalationRouted,
+  TIMELINE_EVENTS,
+} from "./security/timelineEngine";
+import { logLifecycleAudit, logContainmentAudit, logGovernanceAudit, logAssignmentAudit, AUDIT_ACTIONS } from "./security/auditEngine";
+
+const getCanonicalUserRole = (user) => {
+  if (!user) return null;
+  return normalizeRole(user.team) || normalizeRole(user.role);
+};
+
+const eligiblePIRRoles = ["soc_manager", "soc_l2", "ir", "threat_hunter", "admin"];
 
 export default function SOCManagerDashboard() {
   console.log("SOC MANAGER DASHBOARD MOUNTED");
   const navigate = useNavigate();
+
+  const getAnalystDisplayLabel = (uid) => {
+    if (!uid) return "Unassigned";
+    if (uid === "system") return "Auto-Routed";
+    return usersData[uid]?.displayName || usersData[uid]?.email || uid;
+  };
 
   // 🔧 STEP 1 — AUTH INITIALIZATION FIX
   const [firebaseUser, setFirebaseUser] = useState(null);
@@ -32,6 +58,34 @@ export default function SOCManagerDashboard() {
   const [authorized, setAuthorized] = useState(false);
   const [issues, setIssues] = useState([]);
   const [usersData, setUsersData] = useState({});
+
+  // Real-time listener for users collection to populate usersData
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "users"),
+      (snapshot) => {
+        const users = {};
+        snapshot.forEach(doc => {
+          users[doc.id] = {
+            uid: doc.id,
+            ...doc.data()
+          };
+        });
+        setUsersData(users);
+        console.log("MANAGER REALTIME UPDATE: Users loaded:", Object.keys(users).length);
+      },
+      (error) => {
+        console.error("Firestore listener error (manager users):", error);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const topIssueIds = useMemo(() => issues.slice(0, 3).map(i => i.id).filter(Boolean), [issues]);
+  const dashboardTimelineKey = useMemo(() => {
+    return issues.slice(0, 3).map(i => `${i.id}:${i.status}:${i.updatedAt?.seconds || 0}`).sort().join(",");
+  }, [issues]);
+  const { timelines } = useIncidentTimelines(topIssueIds, dashboardTimelineKey);
 
   // ✅ GOVERNANCE HARDENED — overrideTriageStatus via governanceActions (server validates manager role)
   const overrideTriageStatus = async (issueId, newStatus) => {
@@ -44,6 +98,19 @@ export default function SOCManagerDashboard() {
         newValue: newStatus,
         reason,
       });
+
+      // ── Timeline: governance override (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.GOVERNANCE_OVERRIDE, "soc_manager", {
+        newStatus,
+        reason,
+      });
+
+      logGovernanceAudit(issueId, AUDIT_ACTIONS.GOVERNANCE_OVERRIDE, "soc_manager", {
+        reason,
+        targetField: "triageStatus",
+        newValue: newStatus,
+      });
+
       alert(result.message || "✅ Decision overridden");
     } catch (err) {
       alert("Override failed: " + (err?.message || "Unknown error"));
@@ -76,6 +143,13 @@ export default function SOCManagerDashboard() {
         updatedAt: serverTimestamp()
       });
       console.log(`🔵 MANAGER DECISION:`, { status: "containment_in_progress", escalatedTo: "ir", approvedBy: auth.currentUser?.uid });
+
+      // ── Timeline: containment request approved (fire-and-forget) ──
+      appendContainmentEvent(issueId, TIMELINE_EVENTS.CONTAINMENT_APPROVED, "soc_manager", {
+        previousStatus: "containment_pending_approval",
+        newStatus: "containment_in_progress",
+      });
+
       alert("✅ Containment request approved — escalated to IR");
     } catch (err) {
       alert("Failed to approve containment request: " + (err?.message || "Unknown error"));
@@ -91,6 +165,18 @@ export default function SOCManagerDashboard() {
     if (!reason || reason.trim().length < 3) { alert("A reason is required."); return; }
     try {
       const result = await callGovernanceAction(issueId, "REJECT_CONTAINMENT", { reason });
+
+      // ── Timeline: containment rejected (fire-and-forget) ──
+      appendContainmentEvent(issueId, TIMELINE_EVENTS.CONTAINMENT_REJECTED, "soc_manager", {
+        reason,
+      });
+
+      logContainmentAudit(issueId, AUDIT_ACTIONS.CONTAINMENT_REJECTED, "soc_manager", {
+        previousState: "containment_pending_approval",
+        newState: "investigation_l2",
+        reason,
+      });
+
       alert(result.message || "❌ Containment rejected — returned to ir");
     } catch (err) {
       alert("Failed to reject containment: " + (err?.message || "Unknown error"));
@@ -104,6 +190,12 @@ export default function SOCManagerDashboard() {
     if (!authorized) { alert("Unauthorized"); return; }
     try {
       const result = await callApproveEscalation(issueId);
+
+      // ── Timeline: escalation approved (fire-and-forget) ──
+      appendEscalationEvent(issueId, TIMELINE_EVENTS.ESCALATION_APPROVED, "soc_manager", {
+        to: "ir",
+      });
+
       alert(result.message || "✅ Escalation approved — ir assigned");
     } catch (err) {
       alert("Failed to approve escalation: " + (err?.message || "Unknown error"));
@@ -119,6 +211,17 @@ export default function SOCManagerDashboard() {
     if (!reason || reason.trim().length < 3) { alert("A reason is required to reopen."); return; }
     try {
       const result = await callGovernanceAction(issueId, "REOPEN_INCIDENT", { reason });
+
+      // ── Timeline: incident reopened (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.INCIDENT_REOPENED, "soc_manager", {
+        reason,
+      });
+
+      logLifecycleAudit(issueId, AUDIT_ACTIONS.INCIDENT_REOPENED, "soc_manager", {
+        reason,
+        newState: "reopened",
+      });
+
       alert(result.message || "✅ Incident reopened");
     } catch (err) {
       alert("Failed to reopen: " + (err?.message || "Unknown error"));
@@ -155,6 +258,19 @@ export default function SOCManagerDashboard() {
         updatedAt: serverTimestamp()
       });
       console.log(`🔵 MANAGER DECISION:`, { status: "containment_completed", decidedBy: auth.currentUser?.uid });
+
+      // ── Timeline: containment action approved (fire-and-forget) ──
+      appendContainmentEvent(issueId, TIMELINE_EVENTS.CONTAINMENT_EXECUTED, "soc_manager", {
+        previousStatus: "containment_action_submitted",
+        newStatus: "containment_completed",
+      });
+
+      logContainmentAudit(issueId, AUDIT_ACTIONS.CONTAINMENT_APPROVED, "soc_manager", {
+        previousState: "containment_action_submitted",
+        newState: "containment_completed",
+        comment: "Action approved by SOC Manager",
+      });
+
       alert("✅ Containment action approved — workflow completed");
     } catch (err) {
       alert("Failed to approve containment action: " + (err?.message || "Unknown error"));
@@ -191,6 +307,20 @@ export default function SOCManagerDashboard() {
         updatedAt: serverTimestamp()
       });
       console.log(`🔵 MANAGER DECISION:`, { status: "rejected", comment: reason, decidedBy: auth.currentUser?.uid });
+
+      // ── Timeline: containment action rejected (fire-and-forget) ──
+      appendContainmentEvent(issueId, TIMELINE_EVENTS.CONTAINMENT_REJECTED, "soc_manager", {
+        previousStatus: "containment_action_submitted",
+        newStatus: "containment_rejected",
+        reason,
+      });
+
+      logContainmentAudit(issueId, AUDIT_ACTIONS.CONTAINMENT_REJECTED, "soc_manager", {
+        previousState: "containment_action_submitted",
+        newState: "containment_rejected",
+        reason,
+      });
+
       alert("✅ Containment action rejected — IR can resubmit");
     } catch (err) {
       alert("Failed to reject containment action: " + (err?.message || "Unknown error"));
@@ -227,6 +357,20 @@ export default function SOCManagerDashboard() {
         updatedAt: serverTimestamp()
       });
       console.log(`🔵 MANAGER DECISION:`, { status: "review_again", comment: reason, decidedBy: auth.currentUser?.uid });
+
+      // ── Timeline: containment review requested (fire-and-forget) ──
+      appendContainmentEvent(issueId, TIMELINE_EVENTS.CONTAINMENT_REJECTED, "soc_manager", {
+        previousStatus: "containment_action_submitted",
+        newStatus: "containment_review_again",
+        reason,
+      });
+
+      logContainmentAudit(issueId, AUDIT_ACTIONS.CONTAINMENT_REVIEW, "soc_manager", {
+        previousState: "containment_action_submitted",
+        newState: "containment_review_again",
+        reason,
+      });
+
       alert("✅ Review requested — IR can resubmit action");
     } catch (err) {
       alert("Failed to request review: " + (err?.message || "Unknown error"));
@@ -252,6 +396,19 @@ export default function SOCManagerDashboard() {
         rejectedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+      // ── Timeline: containment request rejected (fire-and-forget) ──
+      appendContainmentEvent(issueId, TIMELINE_EVENTS.CONTAINMENT_REJECTED, "soc_manager", {
+        previousStatus: "containment_pending_approval",
+        newStatus: "investigation_l2",
+        reason,
+      });
+
+      logContainmentAudit(issueId, AUDIT_ACTIONS.CONTAINMENT_REJECTED, "soc_manager", {
+        previousState: "containment_pending_approval",
+        newState: "investigation_l2",
+        reason,
+      });
+
       alert("✅ Containment request rejected — returned to L2 investigation");
     } catch (err) {
       alert("Failed to reject containment request: " + (err?.message || "Unknown error"));
@@ -293,6 +450,16 @@ export default function SOCManagerDashboard() {
         executedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+      // ── Timeline: containment executed (fire-and-forget) ──
+      appendContainmentEvent(issueId, TIMELINE_EVENTS.CONTAINMENT_EXECUTED, "soc_manager", {
+        newStatus: "containment_executed",
+      });
+
+      logContainmentAudit(issueId, AUDIT_ACTIONS.CONTAINMENT_EXECUTED, "soc_manager", {
+        previousState: "containment_completed",
+        newState: "containment_executed",
+      });
+
       alert("✅ Containment executed successfully");
     } catch (err) {
       alert("Failed to execute containment: " + (err?.message || "Unknown error"));
@@ -307,6 +474,12 @@ export default function SOCManagerDashboard() {
     const reason = prompt("Reason for denial (optional):") || "";
     try {
       const result = await callDenyEscalation(issueId, reason);
+
+      // ── Timeline: escalation denied (fire-and-forget) ──
+      appendEscalationEvent(issueId, TIMELINE_EVENTS.ESCALATION_DENIED, "soc_manager", {
+        reason,
+      });
+
       alert(result.message || "❌ Escalation denied — incident returned");
     } catch (err) {
       alert("Failed to deny escalation: " + (err?.message || "Unknown error"));
@@ -324,6 +497,21 @@ export default function SOCManagerDashboard() {
         newAssignedTo: team,
         reason,
       });
+
+      // ── Timeline: assignment (fire-and-forget) ──
+      appendAssignmentLifecycle(issueId, "soc_manager", {
+        to: team,
+        reason,
+        isReassign: true,
+      });
+
+      const issueObj = issues.find(i => i.id === issueId);
+      logAssignmentAudit(issueId, "soc_manager", {
+        from: issueObj?.assignedTo || null,
+        to: team,
+        reason,
+      });
+
       alert(result.message || `✅ Incident assigned to ${team}`);
     } catch (err) {
       alert("Assignment failed: " + (err?.message || "Unknown error"));
@@ -342,6 +530,18 @@ export default function SOCManagerDashboard() {
         newUrgency: "critical",
         reason,
       });
+
+      // ── Timeline: SLA override (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.SLA_OVERRIDE, "soc_manager", {
+        newState: "critical",
+        reason,
+      });
+
+      logGovernanceAudit(issueId, AUDIT_ACTIONS.SLA_OVERRIDE, "soc_manager", {
+        reason,
+        newUrgency: "critical",
+      });
+
       alert(result.message || "✅ SLA urgency overridden to CRITICAL");
     } catch (err) {
       alert("SLA override failed: " + (err?.message || "Unknown error"));
@@ -359,6 +559,21 @@ export default function SOCManagerDashboard() {
         newAssignedTo: newTeam,
         reason,
       });
+
+      // ── Timeline: ownership transfer (fire-and-forget) ──
+      appendAssignmentLifecycle(issueId, "soc_manager", {
+        to: newTeam,
+        reason,
+        isReassign: true,
+      });
+
+      const issueObj = issues.find(i => i.id === issueId);
+      logAssignmentAudit(issueId, "soc_manager", {
+        from: issueObj?.assignedTo || null,
+        to: newTeam,
+        reason,
+      });
+
       alert(result.message || `✅ Ownership transferred to ${newTeam}`);
     } catch (err) {
       alert("Transfer failed: " + (err?.message || "Unknown error"));
@@ -383,6 +598,13 @@ export default function SOCManagerDashboard() {
         deletedAt: serverTimestamp(),
         deletedBy: auth.currentUser?.uid,
       });
+
+      // ── Timeline: false positive closure (fire-and-forget) ──
+      appendClosureLifecycle(issueId, "soc_manager", {
+        reason,
+        resolution: "false_positive",
+      });
+
       alert("✅ Incident marked as false positive and deleted");
     } catch (err) {
       alert("Failed: " + (err?.message || "Unknown error"));
@@ -396,6 +618,15 @@ export default function SOCManagerDashboard() {
     if (!authorized) { alert("Unauthorized"); return; }
     try {
       await callLockIncident(issueId, true);
+
+      // ── Timeline: governance lock (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.GOVERNANCE_LOCK, "soc_manager");
+
+      logGovernanceAudit(issueId, AUDIT_ACTIONS.GOVERNANCE_LOCK, "soc_manager", {
+        reason: "Governance lock applied",
+      });
+
+      alert("🔒 Incident locked successfully");
     } catch (err) {
       console.error("lockIncident error:", err);
     }
@@ -407,6 +638,15 @@ export default function SOCManagerDashboard() {
     if (!authorized) { alert("Unauthorized"); return; }
     try {
       await callLockIncident(issueId, false);
+
+      // ── Timeline: governance unlock (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.GOVERNANCE_UNLOCK, "soc_manager");
+
+      logGovernanceAudit(issueId, AUDIT_ACTIONS.GOVERNANCE_UNLOCK, "soc_manager", {
+        reason: "Governance lock removed",
+      });
+
+      alert("🔓 Incident unlocked successfully");
     } catch (err) {
       console.error("unlockIncident error:", err);
     }
@@ -419,6 +659,16 @@ export default function SOCManagerDashboard() {
     if (!reason || reason.trim().length < 3) { alert("A reason is required."); return; }
     try {
       const result = await callGovernanceAction(issueId, "ACCEPT_RISK", { reason });
+
+      // ── Timeline: risk accepted (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.RISK_ACCEPTED, "soc_manager", {
+        reason,
+      });
+
+      logGovernanceAudit(issueId, AUDIT_ACTIONS.RISK_ACCEPTED, "soc_manager", {
+        reason,
+      });
+
       alert(result.message || "✅ Business risk accepted");
     } catch (err) {
       alert("Risk acceptance failed: " + (err?.message || "Unknown error"));
@@ -434,6 +684,16 @@ export default function SOCManagerDashboard() {
     if (!reason || reason.trim().length < 3) { alert("A reason of at least 3 characters is required."); return; }
     try {
       const result = await callGovernanceAction(issueId, "CONVERT_TO_THREAT_HUNT", { reason });
+
+      // ── Timeline: threat hunt conversion (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.THREAT_HUNT_CONVERTED, "soc_manager", {
+        reason,
+      });
+
+      logGovernanceAudit(issueId, AUDIT_ACTIONS.THREAT_HUNT_CONVERTED, "soc_manager", {
+        reason,
+      });
+
       alert(result.message || "✅ Converted to Threat Hunt");
     } catch (err) {
       alert("Conversion failed: " + (err?.message || "Unknown error"));
@@ -449,13 +709,23 @@ export default function SOCManagerDashboard() {
     if (!authorized) { alert("Unauthorized"); return; }
     try {
       const result = await callApproveEscalation(issueId);
+
+      // ── Timeline: escalation routed to IR (fire-and-forget) ──
+      appendEscalationRouted(issueId, "soc_manager");
+
       alert(result.message || "✅ Incident escalated to ir");
     } catch (err) {
       // If escalation was already approved, try TRANSFER_OWNERSHIP instead
       if (err?.code === "functions/already-exists" || err?.message?.includes("already")) {
         const reason = prompt("Incident already approved. Transfer to ir? Enter reason:");
         if (!reason) return;
+        const issueObj = issues.find(i => i.id === issueId);
         await callGovernanceAction(issueId, "TRANSFER_OWNERSHIP", { newAssignedTo: "ir", reason });
+        logAssignmentAudit(issueId, "soc_manager", {
+          from: issueObj?.assignedTo || null,
+          to: "ir",
+          reason,
+        });
         return;
       }
       alert("IR escalation failed: " + (err?.message || "Unknown error"));
@@ -471,6 +741,16 @@ export default function SOCManagerDashboard() {
     if (!reason || reason.trim().length < 3) { alert("A reason is required."); return; }
     try {
       const result = await callGovernanceAction(issueId, "TAG_PIR", { reason });
+
+      // ── Timeline: PIR tagged (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.PIR_TAGGED, "soc_manager", {
+        reason,
+      });
+
+      logGovernanceAudit(issueId, AUDIT_ACTIONS.PIR_TAGGED, "soc_manager", {
+        reason,
+      });
+
       alert(result.message || "✅ PIR tagged");
     } catch (err) {
       alert("PIR tagging failed: " + (err?.message || "Unknown error"));
@@ -486,6 +766,16 @@ export default function SOCManagerDashboard() {
     if (!reason || reason.trim().length < 3) { alert("A justification of at least 3 characters is required."); return; }
     try {
       const result = await callGovernanceAction(issueId, "ACCEPT_RISK", { reason });
+
+      // ── Timeline: risk accepted (fire-and-forget) ──
+      appendLifecycleEvent(issueId, TIMELINE_EVENTS.RISK_ACCEPTED, "soc_manager", {
+        reason,
+      });
+
+      logGovernanceAudit(issueId, AUDIT_ACTIONS.RISK_ACCEPTED, "soc_manager", {
+        reason,
+      });
+
       alert(result.message || "✅ Risk formally accepted");
     } catch (err) {
       alert("Risk acceptance failed: " + (err?.message || "Unknown error"));
@@ -609,7 +899,7 @@ export default function SOCManagerDashboard() {
         normalizeRole(i.assignedTo) === analyst && !i.isDeleted
       );
       return {
-        name: analyst,
+        name: getRoleDisplayLabel(analyst),
         total: analystIssues.length,
         active: analystIssues.filter(i => i.status !== "resolved").length,
         resolved: analystIssues.filter(i => i.status === "resolved").length,
@@ -658,11 +948,8 @@ export default function SOCManagerDashboard() {
   // 🎯 SLA Risk Monitor
   const slaRiskIncidents = useMemo(() => {
     return issues.filter(i => {
-      if (!i.createdAt || i.isDeleted || i.status === "resolved") return false;
-      const now = new Date();
-      const createdAt = i.createdAt.toDate ? i.createdAt.toDate() : new Date(i.createdAt.seconds * 1000);
-      const hoursDiff = (now - createdAt) / (1000 * 60 * 60);
-      return hoursDiff > 22; // Less than 2 hours remaining for 24h SLA
+      const sla = computeSLA(i);
+      return sla.status === "at_risk";
     });
   }, [issues]);
 
@@ -698,6 +985,16 @@ export default function SOCManagerDashboard() {
     if (!reason || reason.trim().length < 3) { alert("A reason is required."); return; }
     try {
       const result = await callGovernanceAction(id, "TAG_RCA", { reason });
+
+      // ── Timeline: RCA tagged (fire-and-forget) ──
+      appendLifecycleEvent(id, TIMELINE_EVENTS.RCA_TAGGED, "soc_manager", {
+        reason,
+      });
+
+      logGovernanceAudit(id, AUDIT_ACTIONS.RCA_TAGGED, "soc_manager", {
+        reason,
+      });
+
       alert(result.message || "✅ RCA tagged");
     } catch (err) {
       alert("RCA tagging failed: " + (err?.message || "Unknown error"));
@@ -741,21 +1038,6 @@ export default function SOCManagerDashboard() {
         }}>
           SOC Manager Dashboard
         </h1>
-        <button
-          onClick={() => navigate("/command-console")}
-          style={{
-            background: "#007bff",
-            color: "white",
-            border: "none",
-            padding: "10px 20px",
-            borderRadius: "5px",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: "bold"
-          }}
-        >
-          Command Console
-        </button>
         <button
           onClick={() => navigate("/analytics")}
           style={{
@@ -907,10 +1189,10 @@ export default function SOCManagerDashboard() {
                   }}
                 >
                   <option value="">Assign To...</option>
-                  <option value="soc_l1">soc_l1</option>
-                  <option value="soc_l2">soc_l2</option>
-                  <option value="ir">ir</option>
-                  <option value="threat_hunter">threat_hunter</option>
+                  <option value="soc_l1">SOC L1 Analyst</option>
+                  <option value="soc_l2">SOC L2 Analyst</option>
+                  <option value="ir">Incident Response</option>
+                  <option value="threat_hunter">Threat Hunter</option>
                 </select>
                 <button
                   onClick={() => {
@@ -1000,7 +1282,7 @@ export default function SOCManagerDashboard() {
                   }}
                   onClick={() => deleteFalsePositive(incident.id)}
                 >
-                  Delete False Positive
+                  {incident.status === "false_positive" ? "Delete False Positive" : "Delete Incident"}
                 </button>
                 {incident.locked ? (
                   <button
@@ -1033,14 +1315,28 @@ export default function SOCManagerDashboard() {
                   Convert to Threat Hunt
                 </button>
                 <button
+                  disabled={!["resolved", "containment_completed"].includes(incident.status)}
                   onClick={() => handlePIR(incident.id)}
-                  style={{ background: "#22c55e", color: "white" }}
+                  style={{
+                    background: "#22c55e",
+                    color: "white",
+                    opacity: ["resolved", "containment_completed"].includes(incident.status) ? 1 : 0.5,
+                    cursor: ["resolved", "containment_completed"].includes(incident.status) ? "pointer" : "not-allowed"
+                  }}
+                  title={!["resolved", "containment_completed"].includes(incident.status) ? "PIR can only be created when the incident is in a completed/terminal operational state" : ""}
                 >
                   Tag PIR
                 </button>
                 <button
+                  disabled={!["resolved", "containment_completed"].includes(incident.status)}
                   onClick={() => handleRCA(incident.id)}
-                  style={{ background: "#f59e0b", color: "white" }}
+                  style={{
+                    background: "#f59e0b",
+                    color: "white",
+                    opacity: ["resolved", "containment_completed"].includes(incident.status) ? 1 : 0.5,
+                    cursor: ["resolved", "containment_completed"].includes(incident.status) ? "pointer" : "not-allowed"
+                  }}
+                  title={!["resolved", "containment_completed"].includes(incident.status) ? "RCA can only be created when the incident is in a completed/terminal operational state" : ""}
                 >
                   Tag RCA
                 </button>
@@ -1088,6 +1384,948 @@ export default function SOCManagerDashboard() {
                   Mark Business Risk
                 </button>
               </div>
+
+              {/* 📋 Enterprise Post-Incident Review (PIR) Panel */}
+              {incident.pirTagged && (
+                <div style={{
+                  marginTop: "12px",
+                  padding: "16px",
+                  background: "var(--glass-bg)",
+                  border: "1px solid var(--glass-border)",
+                  borderRadius: "12px",
+                  boxShadow: "var(--glass-shadow)",
+                  borderLeft: `4px solid ${incident.pirStatus === "completed" ? "var(--success)" : "var(--primary)"}`,
+                  textAlign: "left"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                    <h4 style={{ color: "var(--text-main)", margin: 0, fontSize: "14px" }}>📋 Post-Incident Review (PIR)</h4>
+                    <span style={{
+                      background: incident.pirStatus === "completed" ? "var(--success)" : 
+                                  incident.pirStatus === "in_progress" ? "var(--primary)" : 
+                                  incident.pirStatus === "assigned" ? "var(--warning)" : "var(--text-muted)",
+                      color: "#fff",
+                      fontSize: "10px",
+                      padding: "2px 8px",
+                      borderRadius: "12px",
+                      fontWeight: "bold"
+                    }}>
+                      Status: {incident.pirStatus ? incident.pirStatus.toUpperCase() : "PENDING"} {incident.pirApproved ? "(APPROVED)" : ""}
+                    </span>
+                  </div>
+
+                  {/* Owner Details & Dropdown */}
+                  <div style={{ marginBottom: "10px", fontSize: "12px", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div>
+                      <strong>PIR Owner:</strong> <span style={{ color: "var(--text-main)" }}>{incident.pirOwner ? getAnalystDisplayLabel(incident.pirOwner) : "Not Assigned"}</span>
+                    </div>
+                    
+                    {incident.pirStatus !== "completed" && (
+                      <div style={{ display: "flex", gap: "6px", marginTop: "6px", alignItems: "center" }}>
+                        <select
+                          data-pir-owner-select={incident.id}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "6px",
+                            background: "rgba(0, 0, 0, 0.35)",
+                            color: "var(--text-main)",
+                            border: "1px solid var(--glass-border)",
+                            fontSize: "12px"
+                          }}
+                        >
+                          <option value="">Select Owner...</option>
+                          {Object.entries(usersData)
+                            .filter(([uid, u]) => eligiblePIRRoles.includes(getCanonicalUserRole(u)))
+                            .map(([uid, u]) => (
+                              <option key={uid} value={uid}>
+                                {u.displayName || u.email} ({getCanonicalUserRole(u)})
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          onClick={async () => {
+                            const select = document.querySelector(`select[data-pir-owner-select="${incident.id}"]`);
+                            if (select && select.value) {
+                              const targetUser = usersData[select.value];
+                              const actionType = incident.pirOwner ? "REASSIGN_PIR_OWNER" : "ASSIGN_PIR_OWNER";
+                              const timelineEvent = incident.pirOwner ? TIMELINE_EVENTS.PIR_REASSIGNED : TIMELINE_EVENTS.PIR_ASSIGNED;
+                              const auditAction = incident.pirOwner ? AUDIT_ACTIONS.PIR_REASSIGNED : AUDIT_ACTIONS.PIR_ASSIGNED;
+                              
+                              try {
+                                await callGovernanceAction(incident.id, actionType, {
+                                  assignee: select.value,
+                                  assigneeRole: getCanonicalUserRole(targetUser)
+                                });
+                                appendLifecycleEvent(incident.id, timelineEvent, "soc_manager", {
+                                  assignee: targetUser.email || select.value
+                                });
+                                logGovernanceAudit(incident.id, auditAction, "soc_manager", {
+                                  assignee: select.value
+                                });
+                                alert(`PIR Owner updated successfully`);
+                              } catch (e) {
+                                alert(`Failed to assign PIR owner: ` + e.message);
+                              }
+                            }
+                          }}
+                          style={{
+                            padding: "6px 12px",
+                            background: "var(--primary)",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "6px",
+                            fontSize: "11px",
+                            fontWeight: "600",
+                            cursor: "pointer"
+                          }}
+                        >
+                          {incident.pirOwner ? "Reassign Owner" : "Assign Owner"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Contributors Management */}
+                  <div style={{ marginBottom: "10px", fontSize: "12px", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div>
+                      <strong>Contributors:</strong> <span style={{ color: "var(--text-main)" }}>{incident.pirContributors && incident.pirContributors.length > 0
+                        ? incident.pirContributors.map(uid => getAnalystDisplayLabel(uid)).join(", ")
+                        : "None"}</span>
+                    </div>
+
+                    {incident.pirStatus !== "completed" && (
+                      <div style={{ display: "flex", gap: "6px", marginTop: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                        <select
+                          data-pir-contrib-select={incident.id}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "6px",
+                            background: "rgba(0, 0, 0, 0.35)",
+                            color: "var(--text-main)",
+                            border: "1px solid var(--glass-border)",
+                            fontSize: "12px"
+                          }}
+                        >
+                          <option value="">Add Contributor...</option>
+                          {Object.entries(usersData)
+                            .filter(([uid, u]) => 
+                              eligiblePIRRoles.includes(getCanonicalUserRole(u)) && 
+                              uid !== incident.pirOwner && 
+                              !(incident.pirContributors && incident.pirContributors.includes(uid))
+                            )
+                            .map(([uid, u]) => (
+                              <option key={uid} value={uid}>
+                                {u.displayName || u.email}
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          onClick={async () => {
+                            const select = document.querySelector(`select[data-pir-contrib-select="${incident.id}"]`);
+                            if (select && select.value) {
+                              const targetUser = usersData[select.value];
+                              try {
+                                await callGovernanceAction(incident.id, "ADD_PIR_CONTRIBUTOR", {
+                                  contributor: select.value,
+                                  contributorRole: getCanonicalUserRole(targetUser)
+                                });
+                                appendLifecycleEvent(incident.id, TIMELINE_EVENTS.PIR_CONTRIBUTOR_ADDED, "soc_manager", {
+                                  contributor: targetUser.email || select.value
+                                });
+                                logGovernanceAudit(incident.id, AUDIT_ACTIONS.PIR_CONTRIBUTOR_ADDED, "soc_manager", {
+                                  contributor: select.value
+                                });
+                                alert(`Contributor added successfully`);
+                              } catch (e) {
+                                alert(`Failed to add contributor: ` + e.message);
+                              }
+                            }
+                          }}
+                          style={{
+                            padding: "6px 12px",
+                            background: "var(--primary)",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "6px",
+                            fontSize: "11px",
+                            fontWeight: "600",
+                            cursor: "pointer"
+                          }}
+                        >
+                          Add Contributor
+                        </button>
+
+                        {/* Remove Contributor select */}
+                        {incident.pirContributors && incident.pirContributors.length > 0 && (
+                          <>
+                            <select
+                              data-pir-remove-contrib-select={incident.id}
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: "6px",
+                                background: "rgba(0, 0, 0, 0.35)",
+                                color: "var(--text-main)",
+                                border: "1px solid var(--glass-border)",
+                                fontSize: "12px"
+                              }}
+                            >
+                              <option value="">Remove Contributor...</option>
+                              {incident.pirContributors.map(uid => (
+                                <option key={uid} value={uid}>
+                                  {usersData[uid]?.displayName || usersData[uid]?.email || uid}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={async () => {
+                                const select = document.querySelector(`select[data-pir-remove-contrib-select="${incident.id}"]`);
+                                if (select && select.value) {
+                                  const targetUser = usersData[select.value];
+                                  try {
+                                    await callGovernanceAction(incident.id, "REMOVE_PIR_CONTRIBUTOR", {
+                                      contributor: select.value
+                                    });
+                                    appendLifecycleEvent(incident.id, TIMELINE_EVENTS.PIR_CONTRIBUTOR_REMOVED, "soc_manager", {
+                                      contributor: targetUser?.email || select.value
+                                    });
+                                    logGovernanceAudit(incident.id, AUDIT_ACTIONS.PIR_CONTRIBUTOR_REMOVED, "soc_manager", {
+                                      contributor: select.value
+                                    });
+                                    alert(`Contributor removed successfully`);
+                                  } catch (e) {
+                                    alert(`Failed to remove contributor: ` + e.message);
+                                  }
+                                }
+                              }}
+                              style={{
+                                padding: "6px 12px",
+                                background: "var(--danger)",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: "6px",
+                                fontSize: "11px",
+                                fontWeight: "600",
+                                cursor: "pointer"
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Findings, Lessons Learned, and RCA Recommendation */}
+                  {(incident.pirStatus === "completed" || incident.pirStatus === "in_progress") && (
+                    <div style={{
+                      marginTop: "12px",
+                      padding: "12px",
+                      background: "rgba(0, 0, 0, 0.2)",
+                      borderRadius: "8px",
+                      border: "1px solid var(--glass-border)",
+                      fontSize: "12px"
+                    }}>
+                      <div style={{ marginBottom: "8px" }}>
+                        <strong style={{ color: "var(--text-main)" }}>Summary of Findings:</strong>
+                        <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap", marginTop: "4px" }}>
+                          {incident.pirSummary || "No summary provided yet."}
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: "8px" }}>
+                        <strong style={{ color: "var(--text-main)" }}>Lessons Learned:</strong>
+                        <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap", marginTop: "4px" }}>
+                          {incident.pirLessonsLearned || "No lessons learned recorded yet."}
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: "4px" }}>
+                        <strong style={{ color: "var(--text-main)" }}>Recommend Root Cause Analysis (RCA):</strong>{" "}
+                        <span style={{ color: "var(--text-muted)" }}>{incident.recommendRCA ? "🚨 YES" : "No"}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action Items List */}
+                  {incident.pirActionItems && incident.pirActionItems.length > 0 && (
+                    <div style={{ marginTop: "12px", fontSize: "12px" }}>
+                      <strong style={{ color: "var(--text-main)", display: "block", marginBottom: "6px" }}>Action Items:</strong>
+                      <div style={{ display: "grid", gap: "6px" }}>
+                        {incident.pirActionItems.map(item => (
+                          <div key={item.id} style={{
+                            padding: "8px 10px",
+                            background: item.status === "completed" ? "rgba(16,185,129,0.06)" : "rgba(0, 0, 0, 0.2)",
+                            borderRadius: "8px",
+                            border: "1px solid var(--glass-border)",
+                            borderLeft: `4px solid ${item.priority === "high" ? "var(--danger)" : item.priority === "medium" ? "var(--warning)" : "var(--primary)"}`
+                          }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <strong style={{ color: "var(--text-main)" }}>{item.description}</strong>
+                              <span style={{
+                                fontSize: "10px",
+                                padding: "1px 6px",
+                                borderRadius: "4px",
+                                background: item.priority === "high" ? "rgba(239,68,68,0.15)" : item.priority === "medium" ? "rgba(245,158,11,0.15)" : "rgba(6,182,212,0.15)",
+                                color: item.priority === "high" ? "var(--danger)" : item.priority === "medium" ? "var(--warning)" : "var(--primary)",
+                                fontWeight: "bold"
+                              }}>
+                                {item.priority.toUpperCase()}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "4px" }}>
+                              Owner: {getAnalystDisplayLabel(item.owner)} • Due: {item.dueDate} • Status: <strong style={{ color: item.status === "completed" ? "var(--success)" : "var(--warning)" }}>{item.status.toUpperCase()}</strong>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Manager Approval flow */}
+                  {incident.pirStatus === "completed" && (
+                    <div style={{
+                      marginTop: "16px",
+                      display: "flex",
+                      gap: "8px",
+                      alignItems: "center",
+                      borderTop: "1px solid var(--glass-border)",
+                      paddingTop: "12px"
+                    }}>
+                      {!incident.pirApproved ? (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await callGovernanceAction(incident.id, "APPROVE_PIR", {
+                                callerRole: "soc_manager"
+                              });
+                              appendLifecycleEvent(incident.id, TIMELINE_EVENTS.PIR_APPROVED, "soc_manager");
+                              logGovernanceAudit(incident.id, AUDIT_ACTIONS.PIR_APPROVED, "soc_manager");
+                              alert(`PIR approved successfully`);
+                            } catch (e) {
+                              alert(`Approval failed: ` + e.message);
+                            }
+                          }}
+                          style={{
+                            padding: "8px 16px",
+                            background: "var(--success)",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "6px",
+                            fontWeight: "bold",
+                            cursor: "pointer"
+                          }}
+                        >
+                          ✔ Approve PIR Review
+                        </button>
+                      ) : (
+                        <div style={{ color: "var(--success)", fontWeight: "bold", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span>✔ Approved by Manager on {incident.pirApprovedAt?.toDate?.()?.toLocaleDateString() || "today"}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 🔍 Enterprise Root Cause Analysis (RCA) Panel */}
+              {incident.rcaTagged && (
+                <div style={{
+                  marginTop: "12px",
+                  padding: "16px",
+                  background: "var(--glass-bg)",
+                  border: "1px solid var(--glass-border)",
+                  borderRadius: "12px",
+                  boxShadow: "var(--glass-shadow)",
+                  borderLeft: `4px solid ${incident.rcaApproved ? "var(--success)" : incident.rcaStatus === "completed" ? "#f59e0b" : "var(--primary)"}`,
+                  textAlign: "left"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", gap: "6px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <h4 style={{ color: "var(--text-main)", margin: 0, fontSize: "14px" }}>🔍 Root Cause Analysis (RCA)</h4>
+                      {incident.recommendRCA && (
+                        <span style={{
+                          background: "rgba(239,68,68,0.15)",
+                          color: "var(--danger)",
+                          fontSize: "9px",
+                          padding: "2px 8px",
+                          borderRadius: "12px",
+                          fontWeight: "bold"
+                        }}>
+                          🚨 Recommended by PIR
+                        </span>
+                      )}
+                    </div>
+                    <span style={{
+                      background: incident.rcaApproved ? "var(--success)" :
+                                  incident.rcaStatus === "completed" ? "#f59e0b" :
+                                  incident.rcaStatus === "in_progress" ? "var(--primary)" :
+                                  incident.rcaStatus === "assigned" ? "var(--warning)" : "var(--text-muted)",
+                      color: "#fff",
+                      fontSize: "10px",
+                      padding: "2px 8px",
+                      borderRadius: "12px",
+                      fontWeight: "bold"
+                    }}>
+                      Status: {incident.rcaStatus ? incident.rcaStatus.toUpperCase() : "PENDING"} {incident.rcaApproved ? "(APPROVED)" : ""}
+                    </span>
+                  </div>
+
+                  {/* Owner Details & Dropdown */}
+                  <div style={{ marginBottom: "10px", fontSize: "12px", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div>
+                      <strong>RCA Owner:</strong> <span style={{ color: "var(--text-main)" }}>{incident.rcaOwner ? getAnalystDisplayLabel(incident.rcaOwner) : "Not Assigned"}</span>
+                    </div>
+
+                    {!incident.rcaApproved && incident.rcaStatus !== "completed" && (
+                      <div style={{ display: "flex", gap: "6px", marginTop: "6px", alignItems: "center" }}>
+                        <select
+                          data-rca-owner-select={incident.id}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "6px",
+                            background: "rgba(0, 0, 0, 0.35)",
+                            color: "var(--text-main)",
+                            border: "1px solid var(--glass-border)",
+                            fontSize: "12px"
+                          }}
+                        >
+                          <option value="">Select Owner...</option>
+                          {Object.entries(usersData)
+                            .filter(([uid, u]) => eligiblePIRRoles.includes(getCanonicalUserRole(u)))
+                            .map(([uid, u]) => (
+                              <option key={uid} value={uid}>
+                                {u.displayName || u.email} ({getCanonicalUserRole(u)})
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          onClick={async () => {
+                            const select = document.querySelector(`select[data-rca-owner-select="${incident.id}"]`);
+                            if (select && select.value) {
+                              const targetUser = usersData[select.value];
+                              const actionType = incident.rcaOwner ? "REASSIGN_RCA_OWNER" : "ASSIGN_RCA_OWNER";
+                              const timelineEvent = incident.rcaOwner ? TIMELINE_EVENTS.RCA_REASSIGNED : TIMELINE_EVENTS.RCA_ASSIGNED;
+                              const auditAction = incident.rcaOwner ? AUDIT_ACTIONS.RCA_REASSIGNED : AUDIT_ACTIONS.RCA_ASSIGNED;
+
+                              try {
+                                await callGovernanceAction(incident.id, actionType, {
+                                  assignee: select.value,
+                                  assigneeRole: getCanonicalUserRole(targetUser)
+                                });
+                                appendLifecycleEvent(incident.id, timelineEvent, "soc_manager", {
+                                  assignee: targetUser.email || select.value
+                                });
+                                logGovernanceAudit(incident.id, auditAction, "soc_manager", {
+                                  assignee: select.value
+                                });
+                                alert(`RCA Owner updated successfully`);
+                              } catch (e) {
+                                alert(`Failed to assign RCA owner: ` + e.message);
+                              }
+                            }
+                          }}
+                          style={{
+                            padding: "6px 12px",
+                            background: "var(--primary)",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "6px",
+                            fontSize: "11px",
+                            fontWeight: "600",
+                            cursor: "pointer"
+                          }}
+                        >
+                          {incident.rcaOwner ? "Reassign Owner" : "Assign Owner"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Contributors Management */}
+                  <div style={{ marginBottom: "10px", fontSize: "12px", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div>
+                      <strong>Contributors:</strong> <span style={{ color: "var(--text-main)" }}>{incident.rcaContributors && incident.rcaContributors.length > 0
+                        ? incident.rcaContributors.map(uid => getAnalystDisplayLabel(uid)).join(", ")
+                        : "None"}</span>
+                    </div>
+
+                    {!incident.rcaApproved && incident.rcaStatus !== "completed" && (
+                      <div style={{ display: "flex", gap: "6px", marginTop: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                        <select
+                          data-rca-contrib-select={incident.id}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "6px",
+                            background: "rgba(0, 0, 0, 0.35)",
+                            color: "var(--text-main)",
+                            border: "1px solid var(--glass-border)",
+                            fontSize: "12px"
+                          }}
+                        >
+                          <option value="">Add Contributor...</option>
+                          {Object.entries(usersData)
+                            .filter(([uid, u]) =>
+                              eligiblePIRRoles.includes(getCanonicalUserRole(u)) &&
+                              uid !== incident.rcaOwner &&
+                              !(incident.rcaContributors && incident.rcaContributors.includes(uid))
+                            )
+                            .map(([uid, u]) => (
+                              <option key={uid} value={uid}>
+                                {u.displayName || u.email}
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          onClick={async () => {
+                            const select = document.querySelector(`select[data-rca-contrib-select="${incident.id}"]`);
+                            if (select && select.value) {
+                              const targetUser = usersData[select.value];
+                              try {
+                                await callGovernanceAction(incident.id, "ADD_RCA_CONTRIBUTOR", {
+                                  contributor: select.value,
+                                  contributorRole: getCanonicalUserRole(targetUser)
+                                });
+                                appendLifecycleEvent(incident.id, TIMELINE_EVENTS.RCA_CONTRIBUTOR_ADDED, "soc_manager", {
+                                  contributor: targetUser.email || select.value
+                                });
+                                logGovernanceAudit(incident.id, AUDIT_ACTIONS.RCA_CONTRIBUTOR_ADDED, "soc_manager", {
+                                  contributor: select.value
+                                });
+                                alert(`Contributor added successfully`);
+                              } catch (e) {
+                                alert(`Failed to add contributor: ` + e.message);
+                              }
+                            }
+                          }}
+                          style={{
+                            padding: "6px 12px",
+                            background: "var(--primary)",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "6px",
+                            fontSize: "11px",
+                            fontWeight: "600",
+                            cursor: "pointer"
+                          }}
+                        >
+                          Add Contributor
+                        </button>
+
+                        {/* Remove Contributor select */}
+                        {incident.rcaContributors && incident.rcaContributors.length > 0 && (
+                          <>
+                            <select
+                              data-rca-remove-contrib-select={incident.id}
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: "6px",
+                                background: "rgba(0, 0, 0, 0.35)",
+                                color: "var(--text-main)",
+                                border: "1px solid var(--glass-border)",
+                                fontSize: "12px"
+                              }}
+                            >
+                              <option value="">Remove Contributor...</option>
+                              {incident.rcaContributors.map(uid => (
+                                <option key={uid} value={uid}>
+                                  {usersData[uid]?.displayName || usersData[uid]?.email || uid}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={async () => {
+                                const select = document.querySelector(`select[data-rca-remove-contrib-select="${incident.id}"]`);
+                                if (select && select.value) {
+                                  const targetUser = usersData[select.value];
+                                  try {
+                                    await callGovernanceAction(incident.id, "REMOVE_RCA_CONTRIBUTOR", {
+                                      contributor: select.value
+                                    });
+                                    appendLifecycleEvent(incident.id, TIMELINE_EVENTS.RCA_CONTRIBUTOR_REMOVED, "soc_manager", {
+                                      contributor: targetUser?.email || select.value
+                                    });
+                                    logGovernanceAudit(incident.id, AUDIT_ACTIONS.RCA_CONTRIBUTOR_REMOVED, "soc_manager", {
+                                      contributor: select.value
+                                    });
+                                    alert(`Contributor removed successfully`);
+                                  } catch (e) {
+                                    alert(`Failed to remove contributor: ` + e.message);
+                                  }
+                                }
+                              }}
+                              style={{
+                                padding: "6px 12px",
+                                background: "var(--danger)",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: "6px",
+                                fontSize: "11px",
+                                fontWeight: "600",
+                                cursor: "pointer"
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* RCA Findings (read-only display) */}
+                  {(incident.rcaStatus === "completed" || incident.rcaStatus === "in_progress") && (
+                    <div style={{
+                      marginTop: "12px",
+                      padding: "12px",
+                      background: "rgba(0, 0, 0, 0.2)",
+                      borderRadius: "8px",
+                      border: "1px solid var(--glass-border)",
+                      fontSize: "12px"
+                    }}>
+                      <div style={{ marginBottom: "8px" }}>
+                        <strong style={{ color: "var(--text-main)" }}>Root Cause:</strong>
+                        <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap", marginTop: "4px" }}>
+                          {incident.rootCause || "Not documented yet."}
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: "8px" }}>
+                        <strong style={{ color: "var(--text-main)" }}>Technical Analysis:</strong>
+                        <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap", marginTop: "4px" }}>
+                          {incident.technicalAnalysis || "Not documented yet."}
+                        </div>
+                      </div>
+                      {incident.contributingFactors && incident.contributingFactors.length > 0 && (
+                        <div style={{ marginBottom: "8px" }}>
+                          <strong style={{ color: "var(--text-main)" }}>Contributing Factors:</strong>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                            {incident.contributingFactors.map((cf, i) => (
+                              <div key={i} style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                                <span style={{
+                                  fontSize: "9px",
+                                  padding: "1px 6px",
+                                  borderRadius: "4px",
+                                  background: "rgba(6,182,212,0.15)",
+                                  color: "var(--primary)",
+                                  fontWeight: "bold"
+                                }}>
+                                  {cf.category || "Uncategorized"}
+                                </span>
+                                <span style={{ color: "var(--text-muted)" }}>{cf.factor}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Preventive Actions List */}
+                  {incident.rcaPreventiveActions && incident.rcaPreventiveActions.length > 0 && (
+                    <div style={{ marginTop: "12px", fontSize: "12px" }}>
+                      <strong style={{ color: "var(--text-main)", display: "block", marginBottom: "6px" }}>Preventive Actions:</strong>
+                      <div style={{ display: "grid", gap: "6px" }}>
+                        {incident.rcaPreventiveActions.map(item => (
+                          <div key={item.id} style={{
+                            padding: "8px 10px",
+                            background: item.status === "completed" ? "rgba(16,185,129,0.06)" : "rgba(0, 0, 0, 0.2)",
+                            borderRadius: "8px",
+                            border: "1px solid var(--glass-border)",
+                            borderLeft: `4px solid ${item.priority === "high" ? "var(--danger)" : item.priority === "medium" ? "var(--warning)" : "var(--primary)"}`
+                          }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <strong style={{ color: "var(--text-main)" }}>{item.description}</strong>
+                              <span style={{
+                                fontSize: "10px",
+                                padding: "1px 6px",
+                                borderRadius: "4px",
+                                background: item.priority === "high" ? "rgba(239,68,68,0.15)" : item.priority === "medium" ? "rgba(245,158,11,0.15)" : "rgba(6,182,212,0.15)",
+                                color: item.priority === "high" ? "var(--danger)" : item.priority === "medium" ? "var(--warning)" : "var(--primary)",
+                                fontWeight: "bold"
+                              }}>
+                                {item.priority.toUpperCase()}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "4px" }}>
+                              Owner: {getAnalystDisplayLabel(item.owner)} • Due: {item.dueDate} • Status: <strong style={{ color: item.status === "completed" ? "var(--success)" : "var(--warning)" }}>{item.status.toUpperCase()}</strong>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Manager Approval / Rejection flow */}
+                  {incident.rcaStatus === "completed" && (
+                    <div style={{
+                      marginTop: "16px",
+                      display: "flex",
+                      gap: "8px",
+                      alignItems: "center",
+                      borderTop: "1px solid var(--glass-border)",
+                      paddingTop: "12px",
+                      flexWrap: "wrap"
+                    }}>
+                      {!incident.rcaApproved ? (
+                        <>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await callGovernanceAction(incident.id, "APPROVE_RCA", {
+                                  callerRole: "soc_manager"
+                                });
+                                appendLifecycleEvent(incident.id, TIMELINE_EVENTS.RCA_APPROVED, "soc_manager");
+                                logGovernanceAudit(incident.id, AUDIT_ACTIONS.RCA_APPROVED, "soc_manager");
+                                alert(`RCA approved successfully`);
+                              } catch (e) {
+                                alert(`Approval failed: ` + e.message);
+                              }
+                            }}
+                            style={{
+                              padding: "8px 16px",
+                              background: "var(--success)",
+                              color: "#fff",
+                              border: "none",
+                              borderRadius: "6px",
+                              fontWeight: "bold",
+                              cursor: "pointer"
+                            }}
+                          >
+                            ✔ Approve RCA
+                          </button>
+                          <button
+                            onClick={async () => {
+                              const reason = prompt("Reason for rejecting RCA (required):");
+                              if (!reason || reason.trim().length < 3) { alert("A reason is required."); return; }
+                              try {
+                                await callGovernanceAction(incident.id, "REJECT_RCA", {
+                                  callerRole: "soc_manager",
+                                  reason
+                                });
+                                appendLifecycleEvent(incident.id, TIMELINE_EVENTS.RCA_REJECTED, "soc_manager", { reason });
+                                logGovernanceAudit(incident.id, AUDIT_ACTIONS.RCA_REJECTED, "soc_manager", { reason });
+                                alert(`RCA rejected — returned to in_progress`);
+                              } catch (e) {
+                                alert(`Rejection failed: ` + e.message);
+                              }
+                            }}
+                            style={{
+                              padding: "8px 16px",
+                              background: "var(--danger)",
+                              color: "#fff",
+                              border: "none",
+                              borderRadius: "6px",
+                              fontWeight: "bold",
+                              cursor: "pointer"
+                            }}
+                          >
+                            ❌ Reject RCA
+                          </button>
+                        </>
+                      ) : (
+                        <div style={{ color: "var(--success)", fontWeight: "bold", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span>✔ RCA Approved by Manager on {incident.rcaApprovedAt?.toDate?.()?.toLocaleDateString() || "today"}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 🕵️ Threat Hunting Panel */}
+              {(incident.status === "threat_hunt" || incident.huntStatus) && (
+                <div style={{
+                  marginTop: "12px",
+                  padding: "16px",
+                  background: "var(--glass-bg)",
+                  border: "1px solid var(--glass-border)",
+                  borderRadius: "12px",
+                  boxShadow: "var(--glass-shadow)",
+                  borderLeft: `4px solid ${
+                    incident.huntStatus === "approved" || incident.huntStatus === "completed" ? "var(--success)" :
+                    incident.huntStatus === "submitted" ? "#f59e0b" : "var(--primary)"
+                  }`,
+                  textAlign: "left"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                    <h4 style={{ color: "var(--text-main)", margin: 0, fontSize: "14px" }}>🕵️ Threat Hunting</h4>
+                    <span style={{
+                      background: incident.huntStatus === "approved" || incident.huntStatus === "completed" ? "var(--success)" :
+                                  incident.huntStatus === "submitted" ? "#f59e0b" : "var(--primary)",
+                      color: "#fff",
+                      fontSize: "10px",
+                      padding: "2px 8px",
+                      borderRadius: "12px",
+                      fontWeight: "bold"
+                    }}>
+                      Status: {incident.huntStatus ? incident.huntStatus.toUpperCase() : "PENDING"}
+                    </span>
+                  </div>
+
+                  {incident.huntRejectionReason && incident.huntStatus === "in_progress" && (
+                    <div style={{
+                      marginBottom: "12px",
+                      padding: "10px",
+                      background: "rgba(239, 68, 68, 0.1)",
+                      border: "1px solid rgba(239, 68, 68, 0.3)",
+                      borderRadius: "6px",
+                      fontSize: "12px",
+                      color: "var(--danger)"
+                    }}>
+                      <strong>❌ Rejection Reason:</strong> {incident.huntRejectionReason}
+                    </div>
+                  )}
+
+                  {incident.huntStatus && (
+                    <div style={{
+                      marginTop: "12px",
+                      padding: "12px",
+                      background: "rgba(0, 0, 0, 0.2)",
+                      borderRadius: "8px",
+                      border: "1px solid var(--glass-border)",
+                      fontSize: "12px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "8px"
+                    }}>
+                      <div>
+                        <strong style={{ color: "var(--text-main)" }}>Hunt Notes:</strong>
+                        <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap", marginTop: "4px" }}>
+                          {incident.huntNotes || "No notes recorded yet."}
+                        </div>
+                      </div>
+                      <div>
+                        <strong style={{ color: "var(--text-main)" }}>Hunt Findings:</strong>
+                        <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap", marginTop: "4px" }}>
+                          {incident.huntFindings || "No findings recorded yet."}
+                        </div>
+                      </div>
+                      {incident.huntRecommendation && (
+                        <div>
+                          <strong style={{ color: "var(--text-main)" }}>Recommendation:</strong>
+                          <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap", marginTop: "4px" }}>
+                            {incident.huntRecommendation}
+                          </div>
+                        </div>
+                      )}
+                      {incident.huntCompleteOption && (
+                        <div>
+                          <strong style={{ color: "var(--text-main)" }}>Action Route:</strong>{" "}
+                          <span style={{ color: "var(--text-muted)" }}>
+                            {incident.huntCompleteOption === "return_l2" ? "Option A: Return to L2" : "Option B: Close Hunt"}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {incident.attackTechniques && incident.attackTechniques.length > 0 && (
+                    <div style={{ marginTop: "12px" }}>
+                      <strong style={{ color: "var(--text-main)", display: "block", marginBottom: "6px", fontSize: "12px" }}>Mapped ATT&CK Techniques:</strong>
+                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                        {incident.attackTechniques.map((tech, idx) => (
+                          <div key={idx} style={{
+                            background: "rgba(63, 81, 181, 0.2)",
+                            border: "1px solid rgba(63, 81, 181, 0.4)",
+                            borderRadius: "4px",
+                            padding: "4px 8px",
+                            fontSize: "11px",
+                            color: "var(--text-main)",
+                          }}>
+                            <span style={{ fontWeight: "bold", color: "#7986cb" }}>{tech.techniqueId}</span> - {tech.techniqueName}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {incident.huntStatus === "submitted" && (
+                    <div style={{
+                      marginTop: "16px",
+                      display: "flex",
+                      gap: "8px",
+                      alignItems: "center",
+                      borderTop: "1px solid var(--glass-border)",
+                      paddingTop: "12px",
+                      flexWrap: "wrap"
+                    }}>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await callGovernanceAction(incident.id, "APPROVE_HUNT", {
+                              callerRole: "soc_manager"
+                            });
+                            appendLifecycleEvent(incident.id, TIMELINE_EVENTS.THREAT_HUNT_APPROVED, "soc_manager");
+                            logGovernanceAudit(incident.id, AUDIT_ACTIONS.THREAT_HUNT_APPROVED, "soc_manager");
+
+                            const option = incident.huntCompleteOption || "close";
+                            if (option === "return_l2") {
+                              appendLifecycleEvent(incident.id, TIMELINE_EVENTS.THREAT_HUNT_RETURNED, "soc_manager");
+                              logGovernanceAudit(incident.id, AUDIT_ACTIONS.THREAT_HUNT_RETURNED, "soc_manager");
+                            } else {
+                              appendLifecycleEvent(incident.id, TIMELINE_EVENTS.THREAT_HUNT_COMPLETED, "soc_manager");
+                              logGovernanceAudit(incident.id, AUDIT_ACTIONS.THREAT_HUNT_COMPLETED, "soc_manager");
+                            }
+                            alert(`Threat Hunt approved successfully`);
+                          } catch (e) {
+                            alert(`Approval failed: ` + e.message);
+                          }
+                        }}
+                        style={{
+                          padding: "8px 16px",
+                          background: "var(--success)",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: "6px",
+                          fontWeight: "bold",
+                          cursor: "pointer"
+                        }}
+                      >
+                        ✔ Approve Threat Hunt
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          const reason = prompt("Reason for rejecting Threat Hunt (required):");
+                          if (!reason || reason.trim().length < 3) { alert("A reason is required."); return; }
+                          try {
+                            await callGovernanceAction(incident.id, "REJECT_HUNT", {
+                              callerRole: "soc_manager",
+                              reason
+                            });
+                            appendLifecycleEvent(incident.id, TIMELINE_EVENTS.THREAT_HUNT_REJECTED, "soc_manager", { reason });
+                            logGovernanceAudit(incident.id, AUDIT_ACTIONS.THREAT_HUNT_REJECTED, "soc_manager", { reason });
+                            alert(`Threat Hunt rejected — returned to hunter`);
+                          } catch (e) {
+                            alert(`Rejection failed: ` + e.message);
+                          }
+                        }}
+                        style={{
+                          padding: "8px 16px",
+                          background: "var(--danger)",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: "6px",
+                          fontWeight: "bold",
+                          cursor: "pointer"
+                        }}
+                      >
+                        ❌ Reject Threat Hunt
+                      </button>
+                    </div>
+                  )}
+
+                  {(incident.huntStatus === "approved" || incident.huntStatus === "completed") && (
+                    <div style={{
+                      marginTop: "16px",
+                      borderTop: "1px solid var(--glass-border)",
+                      paddingTop: "12px",
+                      fontSize: "12px",
+                      color: "var(--success)",
+                      fontWeight: "bold"
+                    }}>
+                      ✔ Threat Hunt Approved by Manager on {incident.huntApprovedAt?.toDate?.()?.toLocaleDateString() || "today"}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1261,6 +2499,11 @@ export default function SOCManagerDashboard() {
                               resolvedAt: serverTimestamp(),
                               updatedAt: serverTimestamp()
                             });
+                            logLifecycleAudit(incident.id, AUDIT_ACTIONS.INCIDENT_CLOSED, "soc_manager", {
+                              previousState: incident.status || null,
+                              newState: "resolved",
+                              reason,
+                            });
                           }}
                         >
                           Close Incident
@@ -1344,10 +2587,10 @@ export default function SOCManagerDashboard() {
                 {incident.title}
               </div>
               <div style={{ color: "#aaa", fontSize: "12px" }}>
-                {incident.statusHistory?.slice(-3).map((status, idx) => (
+                {buildRenderableTimeline(timelines.get(incident.id), incident.statusHistory, "desc").slice(0, 3).map((event, idx) => (
                   <div key={idx} style={{ marginBottom: "4px" }}>
-                    <strong>{status.status}</strong> - {status.at?.toDate?.()?.toLocaleString() || "Unknown"}
-                    {status.note && <div style={{ color: "#888", fontSize: "11px" }}>{status.note}</div>}
+                    <strong>{event.icon} {event.displayLabel}</strong> - {event.timestamp ? new Date(event.timestamp).toLocaleString() : "Unknown"}
+                    {event.note && <div style={{ color: "#888", fontSize: "11px" }}>{event.note}</div>}
                   </div>
                 ))}
               </div>

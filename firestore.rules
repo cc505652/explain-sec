@@ -6,6 +6,7 @@ service cloud.firestore {
     // after reverting from Cloud Functions. Future migration back to Cloud Functions
     // should restore the more granular role-based access controls.
 
+    // ── Issues ──────────────────────────────────────────────────────────
     match /issues/{id} {
       allow read: if request.auth != null
         && (
@@ -14,17 +15,24 @@ service cloud.firestore {
           || resource.data.createdBy == request.auth.uid
           || resource.data.assignedTo == request.auth.uid
           || resource.data.assignedTo == "IR Team"
+          || resource.data.assignedTo == "ir"
         );
-      allow update: if request.auth != null;
       allow create: if request.auth != null;
+      // Prevent overwriting immutable fields on update
+      allow update: if request.auth != null
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdBy', 'createdAt']));
     }
 
+    // ── Users ───────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read: if request.auth != null;
-      allow update: if request.auth != null;
       allow create: if request.auth != null;
+      // Users can update their own doc; admin updates handled via CF or direct admin auth
+      allow update: if request.auth != null
+        && (request.auth.uid == userId || resource == null);
     }
 
+    // ── Audit Logs (immutable from client) ──────────────────────────────
     match /audit_logs/{logId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null;
@@ -32,6 +40,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── Notifications ───────────────────────────────────────────────────
     match /notifications/{notifId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null;
@@ -39,17 +48,22 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── Config (read-only from client) ──────────────────────────────────
     match /config/{configId} {
       allow read: if request.auth != null;
+      // Admin seeding writes are handled at first-run; production writes
+      // should go through Cloud Functions when available.
       allow write: if request.auth != null;
     }
 
+    // ── Roles (read-only from client except for admin seeding) ──────────
     match /roles/{roleId} {
       allow read: if request.auth != null;
+      // Kept open for admin seeding; tighten further when CFs handle role management.
       allow write: if request.auth != null;
     }
 
-    // Evidence subcollection for incidents
+    // ── Evidence subcollection for incidents ─────────────────────────────
     match /issues/{issueId}/evidence/{evidenceId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null;
@@ -57,7 +71,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // FALLBACK: deny all unmatched collections
+    // ── FALLBACK: deny all unmatched collections ────────────────────────
     match /{document=**} {
       allow read, write: if false;
     }

@@ -1,6 +1,8 @@
 // Incident State Machine Guard for SOC Platform
 // Prevents illegal workflow transitions
 
+import { normalizeRole } from "./normalizeRole";
+
 // ─── COMPLETE INCIDENT LIFECYCLE ───────────────────────────────────────────
 // open → in_progress → confirmed_threat → escalation_pending
 //       ↓                                         ↓
@@ -28,7 +30,8 @@ export const INCIDENT_TRANSITIONS = {
   open: [
     "in_progress",
     "assigned",
-    "false_positive"
+    "false_positive",
+    "threat_hunt"
   ],
 
   assigned: [
@@ -37,7 +40,8 @@ export const INCIDENT_TRANSITIONS = {
     "false_positive",
     "escalation_pending",
     "escalation_requested",
-    "confirmed_threat"
+    "confirmed_threat",
+    "threat_hunt"
   ],
 
   in_progress: [
@@ -46,14 +50,16 @@ export const INCIDENT_TRANSITIONS = {
     "assigned",
     "escalation_pending",
     "escalation_requested",
-    "containment_pending"
+    "containment_pending",
+    "threat_hunt"
   ],
 
   confirmed_threat: [
     "escalation_pending",
     "in_progress",
     "false_positive",
-    "assigned"
+    "assigned",
+    "threat_hunt"
   ],
 
   escalation_pending: [
@@ -128,14 +134,16 @@ export const INCIDENT_TRANSITIONS = {
   // L2 containment request state
   containment_pending_approval: [
     "containment_in_progress",   // Manager approves → IR sees incident
-    "investigation_l2"           // Manager rejects → back to L2
+    "investigation_l2",          // Manager rejects → back to L2
+    "threat_hunt"
   ],
 
   // L2 investigation state after rejection
   investigation_l2: [
     "in_progress",
     "containment_pending_approval",  // L2 can request again
-    "confirmed_threat"
+    "confirmed_threat",
+    "threat_hunt"
   ],
 
   false_positive: [
@@ -151,7 +159,17 @@ export const INCIDENT_TRANSITIONS = {
   reopened: [
     "open",
     "in_progress",
-    "assigned"
+    "assigned",
+    "threat_hunt"
+  ],
+
+  // Threat Hunt workflow state
+  threat_hunt: [
+    "assigned",
+    "in_progress",
+    "resolved",
+    "confirmed_threat",
+    "investigation_l2"
   ],
 
   // Legacy compatibility: "in_review" was used in older code
@@ -176,17 +194,21 @@ export function isValidTransition(currentStatus, nextStatus) {
 }
 
 // ── Role-Based Action Validation ─────────────────────────────────────────────
-export function canPerformAction(userRole, currentStatus, action) {
+export function canPerformAction(userRole, currentStatus, action, nextStatus = null) {
   const rolePermissions = {
-    L1: {
+    student: {
+      allowedTransitions: {},
+      allowedActions: ["submit_incident"]
+    },
+    soc_l1: {
       allowedTransitions: {
         open: ["in_progress", "assigned"],
         assigned: ["in_progress", "confirmed_threat", "false_positive"],
         in_progress: ["confirmed_threat", "false_positive"]
       },
-      allowedActions: ["start_investigation", "start_triage", "confirm_threat", "mark_false_positive", "escalate_to_l2", "add_note"]
+      allowedActions: ["start_triage", "confirm_threat", "mark_false_positive", "escalate_to_l2", "add_note"]
     },
-    L2: {
+    soc_l2: {
       allowedTransitions: {
         assigned: ["in_progress", "confirmed_threat", "escalation_pending"],
         in_progress: ["confirmed_threat", "escalation_pending", "false_positive"],
@@ -195,7 +217,7 @@ export function canPerformAction(userRole, currentStatus, action) {
       },
       allowedActions: ["request_escalation", "continue_investigation", "confirm_threat", "mark_false_positive", "escalate_to_ir", "add_note", "adjust_severity", "request_containment"]
     },
-    MANAGER: {
+    soc_manager: {
       allowedTransitions: {
         escalation_pending: ["escalation_approved", "in_progress", "confirmed_threat"],
         containment_pending_approval: ["containment_in_progress", "investigation_l2"],
@@ -217,7 +239,7 @@ export function canPerformAction(userRole, currentStatus, action) {
         "assign_ir", "override_triage"
       ]
     },
-    IR: {
+    ir: {
       allowedTransitions: {
         assigned: ["in_progress", "containment_in_progress", "ir_in_progress"],
         escalation_approved: ["containment_in_progress", "ir_in_progress"],
@@ -233,41 +255,36 @@ export function canPerformAction(userRole, currentStatus, action) {
       },
       allowedActions: ["submit_containment_action", "update_containment_action", "execute_containment", "investigate", "block_ip", "isolate_host", "disable_account", "patch_system", "kill_process"]
     },
-    soc_l1: {
+    threat_hunter: {
       allowedTransitions: {
-        open: ["in_progress", "assigned"],
-        assigned: ["in_progress", "confirmed_threat", "false_positive"],
-        in_progress: ["confirmed_threat", "false_positive"]
+        threat_hunt: ["in_progress", "resolved", "confirmed_threat", "investigation_l2"],
+        in_progress: ["resolved", "confirmed_threat", "investigation_l2"],
+        reopened: ["threat_hunt"]
       },
-      allowedActions: ["start_triage", "confirm_threat", "mark_false_positive", "escalate_to_l2", "add_note"]
-    },
-    soc_l2: {
-      allowedTransitions: {
-        assigned: ["in_progress", "confirmed_threat", "escalation_pending"],
-        in_progress: ["confirmed_threat", "escalation_pending", "false_positive"],
-        confirmed_threat: ["escalation_pending", "in_progress"]
-      },
-      allowedActions: ["request_escalation", "continue_investigation", "confirm_threat", "mark_false_positive", "escalate_to_ir", "add_note", "adjust_severity"]
-    },
-    incident_response: {
-      allowedTransitions: {
-        assigned: ["in_progress", "containment_pending"],
-        escalation_approved: ["containment_pending", "in_progress"],
-        ir_in_progress: ["containment_pending"],
-        in_progress: ["containment_pending"],
-        containment_pending: ["contained"]
-      },
-      allowedActions: ["perform_containment", "investigate", "block_ip", "isolate_host", "disable_account", "patch_system", "kill_process"]
+      allowedActions: ["start_hunt", "edit_notes", "edit_findings", "map_attack", "complete_hunt"]
     }
   };
 
-  const permissions = rolePermissions[userRole];
+  // Normalize the incoming role to a canonical form, then map to lookup key
+  const canonical = normalizeRole(userRole) || userRole;
+  const roleKeyMap = {
+    soc_l1: "soc_l1",
+    soc_l2: "soc_l2",
+    soc_manager: "soc_manager",
+    ir: "ir",
+    admin: "soc_manager",  // Admin has manager-level permissions
+    threat_hunter: "threat_hunter",
+    student: "student",
+  };
+  const lookupKey = roleKeyMap[canonical] || userRole;
+
+  const permissions = rolePermissions[lookupKey];
   if (!permissions) return false;
 
   if (!permissions.allowedActions.includes(action)) return false;
 
   const allowedTransitions = permissions.allowedTransitions[currentStatus];
-  if (allowedTransitions && !allowedTransitions.includes(action)) return false;
+  if (allowedTransitions && nextStatus && !allowedTransitions.includes(nextStatus)) return false;
 
   return true;
 }
@@ -297,7 +314,7 @@ export function validateTransition(currentStatus, nextStatus, userRole = null, a
   }
 
   if (userRole && action) {
-    if (!canPerformAction(userRole, currentStatus, action)) {
+    if (!canPerformAction(userRole, currentStatus, action, nextStatus)) {
       return {
         valid: false,
         error: `Action '${action}' not allowed for role '${userRole}' at status '${currentStatus}'`

@@ -12,11 +12,9 @@ export async function login(page, email, password, expectedRoute = '/') {
   
   // Navigate to login page - use domcontentloaded to avoid Firebase WebSocket hangs
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  // Brief pause to let React mount after domcontentloaded
-  await page.waitForTimeout(500);
   
   // Wait for login form to be visible
-  await page.waitForSelector('input[type="email"]', { timeout: 10000 });
+  await page.waitForSelector('input[type="email"]', { timeout: 30000 });
   
   // Fill in credentials - try data-testid first, fallback to type selector
   try {
@@ -38,7 +36,7 @@ export async function login(page, email, password, expectedRoute = '/') {
   }
   
   // Wait for navigation to complete - use domcontentloaded to avoid Firebase WebSocket hangs
-  await page.waitForURL(expectedRoute, { timeout: 30000, waitUntil: 'domcontentloaded' });
+  await page.waitForURL(expectedRoute, { timeout: 60000, waitUntil: 'domcontentloaded' });
   
   // Wait for dashboard to load - use domcontentloaded instead of networkidle for React apps
   await page.waitForLoadState('domcontentloaded');

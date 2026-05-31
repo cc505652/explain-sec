@@ -80,11 +80,12 @@ function AuthProvider({ children }) {
         return;
       }
 
-      setAuthState({
-        user: null,
-        role: null,
+      // Keep previous user/role visible while resolving the new state.
+      // This prevents a brief "no user" flash that can cause a redirect to Login.
+      setAuthState((prev) => ({
+        ...prev,
         isAuthLoading: true,
-      });
+      }));
 
       try {
         const userRef = doc(db, "users", firebaseUser.uid);
@@ -155,14 +156,15 @@ function AppContent() {
     // Role-based redirects - only redirect if not already on a valid route
     const normalizedRole = normalizeRole(role);
     const adminRoutes = ["/admin", "/analytics", "/command-console"];
-    const managerRoutes = ["/soc-manager", "/command-console", "/analytics"];
+    const managerRoutes = ["/soc-manager", "/analytics"];
     const analystRoles = ["soc_l1", "soc_l2", "ir", "threat_hunter"];
+    const analystRoutes = ["/", "/command-console"];
 
     if (normalizedRole === "admin" && !adminRoutes.includes(location.pathname)) {
       navigate("/admin", { replace: true });
     } else if (normalizedRole === "soc_manager" && !managerRoutes.includes(location.pathname)) {
       navigate("/soc-manager", { replace: true });
-    } else if (analystRoles.includes(normalizedRole) && location.pathname !== "/") {
+    } else if (analystRoles.includes(normalizedRole) && !analystRoutes.includes(location.pathname)) {
       navigate("/", { replace: true });
     } else if (normalizedRole === "student" && location.pathname !== "/") {
       navigate("/", { replace: true });
@@ -206,7 +208,7 @@ function AppContent() {
           <Route
             path="/command-console"
             element={
-              <ProtectedRoute allowedRoles={["admin", "soc_manager"]}>
+              <ProtectedRoute allowedRoles={["admin", "soc_manager", "soc_l2"]}>
                 <SOCManager_CommandConsole />
               </ProtectedRoute>
             }
@@ -230,7 +232,8 @@ function AppContent() {
         )}
 
         {/* SOC ANALYST CONSOLE - For all operational roles */}
-        {["soc_l1", "soc_l2", "ir", "threat_hunter"].includes(normalizeRole(role)) && (
+        {/* Route-aware: hide when on /command-console to prevent dual rendering */}
+        {["soc_l1", "soc_l2", "ir", "threat_hunter"].includes(normalizeRole(role)) && location.pathname !== "/command-console" && (
           <AnalystDashboard />
         )}
 

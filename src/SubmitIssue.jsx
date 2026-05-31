@@ -9,6 +9,8 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 import { auth, db, storage } from "./firebase";
 import { autoClassify, urgencyToScore } from "./utils/autoClassify";
+import { appendTimelineEvent, TIMELINE_EVENTS } from "./security/timelineEngine";
+import { logLifecycleAudit, AUDIT_ACTIONS } from "./security/auditEngine";
 
 export default function SubmitIssue() {
   const [title, setTitle] = useState("");
@@ -90,7 +92,7 @@ export default function SubmitIssue() {
 
       const img = await uploadIssueImage(user.uid);
 
-      await addDoc(collection(db, "issues"), {
+      const docRef = await addDoc(collection(db, "issues"), {
         title,
         description,
         category: finalCategory,
@@ -112,7 +114,7 @@ export default function SubmitIssue() {
 
         statusHistory: [
           { status: "open", at: Timestamp.now() },
-          { status: "assigned", at: Timestamp.now(), note: `Auto-routed to ${autoAssignedTo}` }
+          { status: "assigned", at: Timestamp.now(), note: "Queued for analyst review" }
         ],
 
         createdBy: user.uid,
@@ -122,6 +124,29 @@ export default function SubmitIssue() {
         autoReason: aiReason,
         aiEngine: aiSource, // 🔥 shows if rules were used
         isDeleted: false
+      });
+
+      // ── Timeline: incident creation (fire-and-forget) ──
+      appendTimelineEvent({
+        incidentId: docRef.id,
+        eventType: TIMELINE_EVENTS.INCIDENT_CREATED,
+        actorId: user.uid,
+        actorRole: "student",
+        newState: "assigned",
+        metadata: {
+          category: finalCategory,
+          urgency: finalUrgency,
+          assignedTo: autoAssignedTo,
+          aiEngine: aiSource,
+        },
+      });
+
+      logLifecycleAudit(docRef.id, AUDIT_ACTIONS.INCIDENT_CREATED, "student", {
+        category: finalCategory,
+        urgency: finalUrgency,
+        assignedTo: autoAssignedTo,
+        previousState: null,
+        newState: "assigned",
       });
 
       setTitle("");

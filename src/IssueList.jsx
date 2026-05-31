@@ -1,6 +1,9 @@
 import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { auth, db } from "./firebase";
+import { useIncidentTimelines } from "./hooks/useIncidentTimelines";
+import { buildRenderableTimeline } from "./utils/timelineReader";
+import { getRoleDisplayLabel } from "./utils/normalizeRole";
 
 /* ---------- HELPERS ---------- */
 
@@ -15,15 +18,28 @@ const statusLabel = (s) => {
   return s || "Unknown";
 };
 
-const assignedLabel = (v) => {
-  if (!v) return "Unassigned";
-  if (v === "plumber") return "Plumber";
-  if (v === "electrician") return "Electrician";
-  if (v === "wifi_team") return "WiFi/Network Team";
-  if (v === "mess_supervisor") return "Mess Supervisor";
-  if (v === "maintenance") return "Maintenance/Carpenter";
-  if (v === "system") return "Auto-Routed";
-  return v;
+const assignedLabel = (assignedTo, status) => {
+  if (!assignedTo || assignedTo === "null") {
+    switch (status) {
+      case "assigned":
+      case "in_progress":
+        return "SOC L1 Queue";
+      case "confirmed_threat":
+        return "SOC L2 Queue";
+      case "containment_pending_approval":
+      case "containment_action_submitted":
+      case "false_positive":
+        return "SOC Manager Review";
+      case "containment_in_progress":
+      case "containment_completed":
+        return "Incident Response";
+      case "resolved":
+        return "Resolved";
+      default:
+        return "Unassigned";
+    }
+  }
+  return getRoleDisplayLabel(assignedTo);
 };
 
 function tsToMillis(ts) {
@@ -91,6 +107,12 @@ function urgencyPill(urg) {
 
 export default function IssueList() {
   const [issues, setIssues] = useState([]);
+
+  const incidentIds = useMemo(() => issues.map(i => i.id).filter(Boolean), [issues]);
+  const dependencyKey = useMemo(() => {
+    return issues.map(i => `${i.id}:${i.status}:${i.updatedAt?.seconds || 0}`).sort().join(",");
+  }, [issues]);
+  const { timelines } = useIncidentTimelines(incidentIds, dependencyKey);
   const [sortMode, setSortMode] = useState("newest"); // newest | priority
   const [nowTick, setNowTick] = useState(Date.now());
 
@@ -195,7 +217,7 @@ export default function IssueList() {
                   <span style={pillStyle("#000")}>🚨 ESCALATED</span>
                 )}
 
-                <span style={pillStyle("#263238")}>👷 {assignedLabel(issue.assignedTo)}</span>
+                <span style={pillStyle("#263238")}>👤 {assignedLabel(issue.assignedTo, issue.status)}</span>
               </div>
 
               {/* META */}
@@ -256,15 +278,12 @@ export default function IssueList() {
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #ddd" }}>
                 <strong style={{ fontSize: 13 }}>Incident Timeline</strong>
                 <ul style={{ marginTop: 8, paddingLeft: 18 }}>
-                  {(issue.statusHistory || [])
-                    .slice()
-                    .reverse()
-                    .map((h, idx) => (
-                      <li key={idx} style={{ fontSize: 12, marginBottom: 6, opacity: 0.9 }}>
-                        <b>{statusLabel(h.status).toUpperCase()}</b> — {formatClock(h.at)}
-                        {h.note ? ` — ${h.note}` : ""}
-                      </li>
-                    ))}
+                  {buildRenderableTimeline(timelines.get(issue.id), issue.statusHistory, "desc").map((event, idx) => (
+                    <li key={idx} style={{ fontSize: 12, marginBottom: 6, opacity: 0.9 }}>
+                      <b>{event.icon} {event.displayLabel}</b> — {formatClock(event.timestamp)}
+                      {event.note ? ` — ${event.note}` : ""}
+                    </li>
+                  ))}
                 </ul>
               </div>
             </div>

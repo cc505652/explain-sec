@@ -26,6 +26,9 @@ import {
 } from "./utils/socFunctions";
 import InvestigationPanel from "./components/InvestigationPanel";
 import CollaborationPanel from "./components/CollaborationPanel";
+import { useIncidentTimelines } from "./hooks/useIncidentTimelines";
+import { buildRenderableTimeline } from "./utils/timelineReader";
+import { computeSLA } from "./utils/slaEngine";
 
 /* ---------- RBAC & INTELLIGENCE MODULES ---------- */
 
@@ -59,25 +62,13 @@ const CLUSTER_WINDOW_MS = 30 * 60 * 1000;
 
 /* ---------- SLA HELPERS ---------- */
 
-const MS_IN_HOUR = 60 * 60 * 1000;
 const urgencyRank = { high: 3, medium: 2, low: 1 };
 const attentionOrder = { overdue: 0, delayed: 1, "on-time": 2 };
 
-function hoursSince(ts) {
-  if (!ts) return 0;
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return (Date.now() - d.getTime()) / MS_IN_HOUR;
-}
-
 function getSlaFlag(issue) {
-  if (issue.status === "open") {
-    const openedAt = issue.statusHistory?.[0]?.at;
-    if (openedAt && hoursSince(openedAt) > 24) return "delayed";
-  }
-  if (issue.status === "assigned") {
-    const assigned = issue.statusHistory?.find((h) => h.status === "assigned");
-    if (assigned && hoursSince(assigned.at) > 48) return "overdue";
-  }
+  const sla = computeSLA(issue);
+  if (sla.status === "breached") return "overdue";
+  if (sla.status === "at_risk") return "delayed";
   return "on-time";
 }
 
@@ -115,90 +106,20 @@ function formatClock(ts) {
   return d.toLocaleString();
 }
 
-const SLA_HOURS = {
-  open: 24,
-  assigned: 48
-};
-
-function formatDuration(ms) {
-  const abs = Math.abs(ms);
-  const totalMin = Math.floor(abs / (60 * 1000));
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h === 0) return `${m}m`;
-  return `${h}h ${m}m`;
-}
-
 function getSlaDisplay(issue) {
-  const createdAtMs = tsToMillis(issue.createdAt);
-  const now = Date.now();
-  if (!createdAtMs) return { label: "SLA: —", color: "#999", breached: false };
-
-  if (issue.status === "open") {
-    const deadline = createdAtMs + SLA_HOURS.open * 60 * 60 * 1000;
-    const remaining = deadline - now;
-    if (remaining >= 0) {
-      return {
-        label: `⏱ SLA: ${formatDuration(remaining)} left`,
-        color: "#1b5e20",
-        breached: false
-      };
-    }
-    return {
-      label: `SLA BREACHED: ${formatDuration(remaining)} ago`,
-      color: "#b71c1c",
-      breached: true
-    };
-  }
-
-  if (issue.status === "assigned" || issue.status === "in_progress") {
-    const assignedEntry = issue.statusHistory?.find((h) => h.status === "assigned");
-    const assignedAtMs = tsToMillis(assignedEntry?.at) || createdAtMs;
-
-    const deadline = assignedAtMs + SLA_HOURS.assigned * 60 * 60 * 1000;
-    const remaining = deadline - now;
-    if (remaining >= 0) {
-      return {
-        label: `⏱ SLA: ${formatDuration(remaining)} left`,
-        color: "#1b5e20",
-        breached: false
-      };
-    }
-    return {
-      label: `SLA BREACHED: ${formatDuration(remaining)} ago`,
-      color: "#b71c1c",
-      breached: true
-    };
-  }
-
-  return { label: "SLA: complete", color: "#0d47a1", breached: false };
+  const sla = computeSLA(issue);
+  return {
+    label: sla.label,
+    color: sla.color,
+    breached: sla.breached
+  };
 }
 
 /* ---------- ENHANCED SLA HELPERS FOR ANALYSTS ---------- */
 
 function needsAttention(issue) {
-  const slaDisplay = getSlaDisplay(issue);
-  if (slaDisplay.breached) return true;
-  
-  // Check if approaching breach (< 2 hours left)
-  const createdAtMs = tsToMillis(issue.createdAt);
-  const now = Date.now();
-  
-  if (issue.status === "open") {
-    const deadline = createdAtMs + SLA_HOURS.open * 60 * 60 * 1000;
-    const remaining = deadline - now;
-    return remaining > 0 && remaining < 2 * 60 * 60 * 1000; // < 2 hours
-  }
-  
-  if (issue.status === "assigned" || issue.status === "in_progress") {
-    const assignedEntry = issue.statusHistory?.find((h) => h.status === "assigned");
-    const assignedAtMs = tsToMillis(assignedEntry?.at) || createdAtMs;
-    const deadline = assignedAtMs + SLA_HOURS.assigned * 60 * 60 * 1000;
-    const remaining = deadline - now;
-    return remaining > 0 && remaining < 2 * 60 * 60 * 1000; // < 2 hours
-  }
-  
-  return false;
+  const sla = computeSLA(issue);
+  return sla.breached || sla.atRisk;
 }
 
 /* ---------- PREMIUM PILLS ---------- */
@@ -236,9 +157,9 @@ function urgencyPill(urg) {
 /* ---------- STAFF OPTIONS ---------- */
 
 const STAFF_OPTIONS = [
-  { value: "soc_l1", label: "SOC Analyst L1" },
-  { value: "soc_l2", label: "SOC Analyst L2" },
-  { value: "incident_response", label: "Incident Response Team" },
+  { value: "soc_l1", label: "SOC L1 Analyst" },
+  { value: "soc_l2", label: "SOC L2 Analyst" },
+  { value: "ir", label: "Incident Response" },
   { value: "threat_hunter", label: "Threat Hunter" },
   { value: "forensics", label: "Digital Forensics" },
   { value: "cloud_security", label: "Cloud Security Team" },
@@ -249,6 +170,7 @@ const STAFF_OPTIONS = [
 function getAnalystDisplayLabel(assignedTo, usersData) {
   // If no assignment, return unassigned
   if (!assignedTo) return "Unassigned";
+  if (assignedTo === "system") return "Auto-Routed";
   
   // Check if we have user data for this UID
   if (usersData && usersData[assignedTo]) {
@@ -260,9 +182,9 @@ function getAnalystDisplayLabel(assignedTo, usersData) {
     // Add role/level information
     if (userData.analystLevel) {
       const levelLabels = {
-        "L1": "L1 Analyst",
-        "L2": "L2 Analyst", 
-        "IR": "IR Specialist",
+        "L1": "SOC L1 Analyst",
+        "L2": "SOC L2 Analyst", 
+        "IR": "Incident Response",
         "TH": "Threat Hunter"
       };
       displayName += ` (${levelLabels[userData.analystLevel] || userData.analystLevel})`;
@@ -270,7 +192,7 @@ function getAnalystDisplayLabel(assignedTo, usersData) {
       const roleLabels = {
         "admin": "Admin",
         "analyst": "Analyst",
-        "student": "Student"
+        "student": "Reporter"
       };
       displayName += ` (${roleLabels[userData.role] || userData.role})`;
     }
@@ -307,9 +229,9 @@ function generateUserOptions(usersData, currentUserRole) {
     // Add analyst level information
     if (userData.analystLevel) {
       const levelLabels = {
-        "L1": "L1 Analyst",
-        "L2": "L2 Analyst", 
-        "IR": "IR Specialist",
+        "L1": "SOC L1 Analyst",
+        "L2": "SOC L2 Analyst", 
+        "IR": "Incident Response",
         "TH": "Threat Hunter"
       };
       displayName += ` (${levelLabels[userData.analystLevel] || userData.analystLevel})`;
@@ -317,7 +239,7 @@ function generateUserOptions(usersData, currentUserRole) {
       const roleLabels = {
         "admin": "Admin",
         "analyst": "Analyst",
-        "student": "Student"
+        "student": "Reporter"
       };
       displayName += ` (${roleLabels[userData.role] || userData.role})`;
     }
@@ -527,7 +449,26 @@ export default function SOCManager_CommandConsole() {
   const navigate = useNavigate();
   const [issues, setIssues] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
-  const [userRole, setUserRole] = useState("analyst");
+  const [userRole, setUserRole] = useState("soc_l1");
+
+  const visibleIssues = useMemo(() => {
+    if (normalizeRole(userRole) === "soc_l2") {
+      return issues.filter((i) =>
+        i.status !== "false_positive" &&
+        i.status !== "resolved" &&
+        i.status !== "closed" &&
+        i.status !== "threat_hunt" &&
+        !i.isDeleted
+      );
+    }
+    return issues;
+  }, [issues, userRole]);
+
+  const incidentIds = useMemo(() => visibleIssues.map(i => i.id).filter(Boolean), [visibleIssues]);
+  const dependencyKey = useMemo(() => {
+    return visibleIssues.map(i => `${i.id}:${i.status}:${i.updatedAt?.seconds || 0}`).sort().join(",");
+  }, [visibleIssues]);
+  const { timelines } = useIncidentTimelines(incidentIds, dependencyKey);
   const [users, setUsers] = useState({});
 
   // ✅ Live refresh tick
@@ -575,7 +516,11 @@ export default function SOCManager_CommandConsole() {
   const [bulkResult, setBulkResult] = useState(null);
 
   // Phase 6: Investigation workspace
-  const [investigateIssue, setInvestigateIssue] = useState(null);
+  const [investigateIssueId, setInvestigateIssueId] = useState(null);
+  const activeInvestigateIssue = useMemo(() => {
+    if (!investigateIssueId) return null;
+    return visibleIssues.find(i => i.id === investigateIssueId) || null;
+  }, [visibleIssues, investigateIssueId]);
 
   /* ---------- REALTIME FETCH ---------- */
   useEffect(() => {
@@ -626,7 +571,7 @@ export default function SOCManager_CommandConsole() {
         } else {
           const userData = userDoc.data();
           console.log("👤 CommandConsole - User role fetched:", { uid: currentUser.uid, role: userData.role });
-          setUserRole(userData.role || "analyst");
+          setUserRole(normalizeRole(userData.role) || "soc_l1");
         }
       } catch (error) {
         console.error("Error fetching user role:", error);
@@ -878,21 +823,21 @@ export default function SOCManager_CommandConsole() {
   /* ---------- ANALYST WORKLOAD INDICATOR ---------- */
   const analystWorkload = useMemo(() => {
     if (!currentUser) return 0;
-    return issues.filter(i => 
+    return visibleIssues.filter(i => 
       !i.isDeleted && 
       i.assignedTo === currentUser.uid && 
       i.status !== "resolved"
     ).length;
-  }, [issues, currentUser]);
+  }, [visibleIssues, currentUser]);
 
   /* ---------- ENHANCED INTELLIGENCE ANALYTICS ---------- */
   const enhancedIssues = useMemo(() => {
-    return issues.map(issue => {
+    return visibleIssues.map(issue => {
       // Add MITRE ATT&CK mapping
       const mitreInfo = MITRE_MAPPING[issue.category] || { tactic: '', technique: '', name: '' };
       
       // Calculate SLA breach prediction
-      const analystActiveTickets = issues.filter(i => 
+      const analystActiveTickets = visibleIssues.filter(i => 
         i.assignedTo === issue.assignedTo && 
         i.status !== 'resolved' && 
         !i.isDeleted
@@ -914,20 +859,20 @@ export default function SOCManager_CommandConsole() {
         stuck
       };
     });
-  }, [issues, mttaMttrStats]);
+  }, [visibleIssues, mttaMttrStats]);
 
   // Auto-assignment effect
   useEffect(() => {
     if (!autoAssignmentEnabled) return;
     
-    const openUnassignedIssues = issues.filter(issue => 
+    const openUnassignedIssues = visibleIssues.filter(issue => 
       issue.status === 'open' && !issue.assignedTo && !issue.isDeleted
     );
     
     openUnassignedIssues.forEach(issue => {
       autoAssignIssue(issue);
     });
-  }, [issues, autoAssignmentEnabled, users]);
+  }, [visibleIssues, autoAssignmentEnabled, users]);
 
   // Analyst Fatigue Index
   const analystFatigueIndex = useMemo(() => {
@@ -936,40 +881,40 @@ export default function SOCManager_CommandConsole() {
     Object.entries(users).forEach(([uid, userData]) => {
       if (userData.role !== 'analyst') return;
       
-      const activeTickets = issues.filter(i => 
+      const activeIncidents = visibleIssues.filter(i => 
         i.assignedTo === uid && 
         i.status !== 'resolved' && 
         !i.isDeleted
       ).length;
       
-      const highUrgencyTickets = issues.filter(i => 
+      const highUrgencyIncidents = visibleIssues.filter(i => 
         i.assignedTo === uid && 
         i.urgency === 'high' && 
         i.status !== 'resolved' && 
         !i.isDeleted
       ).length;
       
-      const stuckTickets = issues.filter(i => 
+      const stuckIncidents = visibleIssues.filter(i => 
         i.assignedTo === uid && 
         isStuckIncident(i) && 
         !i.isDeleted
       ).length;
       
       // Calculate fatigue score (0-100)
-      const fatigueScore = Math.min(100, (activeTickets * 10) + (highUrgencyTickets * 20) + (stuckTickets * 30));
+      const fatigueScore = Math.min(100, (activeIncidents * 10) + (highUrgencyIncidents * 20) + (stuckIncidents * 30));
       
       fatigueData[uid] = {
         name: userData.email || uid,
-        activeTickets,
-        highUrgencyTickets,
-        stuckTickets,
+        activeIncidents,
+        highUrgencyIncidents,
+        stuckIncidents,
         fatigueScore,
         fatigueLevel: fatigueScore > 80 ? 'critical' : fatigueScore > 50 ? 'high' : fatigueScore > 20 ? 'medium' : 'low'
       };
     });
     
     return fatigueData;
-  }, [issues, users]);
+  }, [visibleIssues, users]);
 
   // Stuck incidents
   const stuckIncidents = useMemo(() => {
@@ -1039,18 +984,18 @@ export default function SOCManager_CommandConsole() {
   });
 
   /* ---------- HEATMAP ---------- */
-  const hostelCounts = useMemo(() => {
-    return issues.reduce((acc, i) => {
+  const locationCounts = useMemo(() => {
+    return visibleIssues.reduce((acc, i) => {
       if (i.isDeleted) return acc;
       acc[i.location] = (acc[i.location] || 0) + 1;
       return acc;
     }, {});
-  }, [issues]);
+  }, [visibleIssues]);
 
   /* ---------- TOP STATS ---------- */
   const topStats = useMemo(() => {
     void nowTick;
-    const active = issues.filter((i) => !i.isDeleted);
+    const active = visibleIssues.filter((i) => !i.isDeleted);
     const open = active.filter((i) => i.status === "open").length;
     const assigned = active.filter((i) => i.status === "assigned").length;
     const inProgress = active.filter((i) => i.status === "in_progress").length;
@@ -1058,19 +1003,19 @@ export default function SOCManager_CommandConsole() {
     const breached = active.filter((i) => getSlaDisplay(i).breached).length;
     const escalated = active.filter((i) => i.escalated).length;
     return { open, assigned, inProgress, resolved, breached, escalated };
-  }, [issues, nowTick]);
+  }, [visibleIssues, nowTick]);
 
   /* ---------- OPS HIGHLIGHTS ---------- */
   const opsHighlights = useMemo(() => {
     void nowTick;
 
-    const active = issues.filter((i) => !i.isDeleted);
+    const active = visibleIssues.filter((i) => !i.isDeleted);
 
     const urgent = [...active]
       .filter((i) => i.status !== "resolved")
       .sort((a, b) => (b.urgencyScore ?? 0) - (a.urgencyScore ?? 0))[0];
 
-    const hotspotEntry = Object.entries(hostelCounts).sort((a, b) => b[1] - a[1])[0];
+    const hotspotEntry = Object.entries(locationCounts).sort((a, b) => b[1] - a[1])[0];
 
     const staffLoad = {};
     for (const i of active) {
@@ -1084,11 +1029,11 @@ export default function SOCManager_CommandConsole() {
       hotspot: hotspotEntry ? { location: hotspotEntry[0], count: hotspotEntry[1] } : null,
       topStaff: topStaffEntry ? { staff: topStaffEntry[0], count: topStaffEntry[1] } : null
     };
-  }, [issues, hostelCounts, nowTick]);
+  }, [visibleIssues, locationCounts, nowTick]);
 
   /* ---------- EVIDENCE LIST ---------- */
   const evidenceIssues = useMemo(() => {
-    const withEvidence = issues
+    const withEvidence = visibleIssues
       .filter((i) => !i.isDeleted)
       .filter((i) => i.evidenceImage?.url);
 
@@ -1097,14 +1042,14 @@ export default function SOCManager_CommandConsole() {
       const okUrg = galleryUrgency === "all" || i.urgency === galleryUrgency;
       return okCat && okUrg;
     });
-  }, [issues, galleryCategory, galleryUrgency]);
+  }, [visibleIssues, galleryCategory, galleryUrgency]);
 
   /* ---------- AI WEEKLY SUMMARY ---------- */
   const generateWeeklySummary = async () => {
     try {
       setAiLoading(true);
 
-      const last7 = issues
+      const last7 = visibleIssues
         .filter((i) => !i.isDeleted)
         .filter((i) => {
           const ms = i.createdAt?.toMillis?.() ?? 0;
@@ -1182,7 +1127,7 @@ ${Object.entries(stats.byUrgency).length
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <button 
-            onClick={() => navigate("/soc-manager")}
+            onClick={() => navigate("/")}
             style={{
               background: "var(--primary)",
               color: "#fff",
@@ -1194,9 +1139,9 @@ ${Object.entries(stats.byUrgency).length
               fontWeight: "600"
             }}
           >
-            Back to Manager Dashboard
+            Back to L2 Dashboard
           </button>
-          <h2 style={{ color: "var(--text-main)", margin: 0 }}>SOC Manager Command Console</h2>
+          <h2 style={{ color: "var(--text-main)", margin: 0 }}>SOC Investigation Console</h2>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {/* Phase 4: Global Search */}
@@ -1227,14 +1172,16 @@ ${Object.entries(stats.byUrgency).length
               >✕</button>
             )}
           </div>
-          <button
-            onClick={() => navigate("/analytics")}
-            style={{
-              background: "linear-gradient(135deg, #06b6d4, #8b5cf6)",
-              color: "#fff", border: "none", padding: "8px 14px",
-              borderRadius: 10, cursor: "pointer", fontSize: 12, fontWeight: 700,
-            }}
-          >📊 Analytics</button>
+          {(normalizeRole(userRole) === "admin" || normalizeRole(userRole) === "soc_manager") && (
+            <button
+              onClick={() => navigate("/analytics")}
+              style={{
+                background: "linear-gradient(135deg, #06b6d4, #8b5cf6)",
+                color: "#fff", border: "none", padding: "8px 14px",
+                borderRadius: 10, cursor: "pointer", fontSize: 12, fontWeight: 700,
+              }}
+            >📊 Analytics</button>
+          )}
           {/* Analyst Workload Indicator */}
           <div className="glass-panel" style={{ 
             background: analystWorkload > 5 ? "rgba(239, 68, 68, 0.1)" : "rgba(16, 185, 129, 0.1)", 
@@ -1349,7 +1296,7 @@ ${Object.entries(stats.byUrgency).length
                 }}>
                   <div style={{ fontWeight: 900, color: "var(--text-main)" }}>{data.name}</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                    Active: {data.activeTickets} | High Urgency: {data.highUrgencyTickets} | Stuck: {data.stuckTickets}
+                    Active: {data.activeIncidents} | High Urgency: {data.highUrgencyIncidents} | Stuck: {data.stuckIncidents}
                   </div>
                   <div style={{ 
                     fontSize: 14, 
@@ -1595,7 +1542,7 @@ ${Object.entries(stats.byUrgency).length
               {opsHighlights.topStaff ? (
                 <>
                   <div><b style={{ color: "var(--text-main)" }}>{getAnalystDisplayLabel(opsHighlights.topStaff.staff, users)}</b></div>
-                  <div style={{ opacity: 0.8, marginTop: 4, color: "var(--text-muted)" }}>{opsHighlights.topStaff.count} assigned tickets</div>
+                  <div style={{ opacity: 0.8, marginTop: 4, color: "var(--text-muted)" }}>{opsHighlights.topStaff.count} assigned incidents</div>
                 </>
               ) : "—"}
             </div>
@@ -1635,7 +1582,7 @@ ${Object.entries(stats.byUrgency).length
         <h3 style={{ marginTop: 0, color: "var(--text-main)" }}>Issue Distribution</h3>
         <table border="1" cellPadding="8" style={{ width: "100%", background: "rgba(0, 0, 0, 0.2)", borderRadius: 8 }}>
           <tbody>
-            {Object.entries(hostelCounts).map(([k, v]) => (
+            {Object.entries(locationCounts).map(([k, v]) => (
               <tr key={k} style={{ borderBottom: "1px solid var(--glass-border)" }}>
                 <td style={{ padding: "8px 12px", color: "var(--text-muted)" }}>{k}</td>
                 <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 900, color: "var(--text-main)" }}>{v}</td>
@@ -1947,7 +1894,7 @@ ${Object.entries(stats.byUrgency).length
 
                 {/* Phase 6: Investigate Button */}
                 <button
-                  onClick={() => setInvestigateIssue(issue)}
+                  onClick={() => setInvestigateIssueId(issue.id)}
                   style={{
                     background: "linear-gradient(135deg, #06b6d4, #8b5cf6)",
                     color: "#fff", border: "none",
@@ -1960,10 +1907,11 @@ ${Object.entries(stats.byUrgency).length
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--glass-border)" }}>
                 <strong style={{ fontSize: 13, color: "var(--text-main)" }}>Incident Timeline</strong>
                 <ul style={{ marginTop: 8, paddingLeft: 18 }}>
-                  {(issue.statusHistory || []).slice().reverse().map((h, idx) => (
+                  {buildRenderableTimeline(timelines.get(issue.id), issue.statusHistory, "desc").map((event, idx) => (
                     <li key={idx} style={{ fontSize: 12, marginBottom: 6, opacity: 0.9, color: "var(--text-muted)" }}>
-                      <b style={{ color: "var(--text-main)" }}>{String(h.status).toUpperCase()}</b> — {formatClock(h.at)}
-                      {h.note ? ` — ${h.note}` : ""}
+                      <b style={{ color: "var(--text-main)" }}>{event.icon} {event.displayLabel}</b> — {formatClock(event.timestamp)}
+                      {event.note ? ` — ${event.note}` : ""}
+                      {event.actor ? <span style={{ fontSize: 10, opacity: 0.8 }}> (by {event.actor})</span> : ""}
                     </li>
                   ))}
                 </ul>
@@ -2116,7 +2064,7 @@ ${Object.entries(stats.byUrgency).length
                       <span style={statusPill(gallerySelected.status)}>{String(gallerySelected.status).toUpperCase()}</span>
                       <span style={urgencyPill(gallerySelected.urgency)}>{String(gallerySelected.urgency).toUpperCase()}</span>
                       {gallerySelected.escalated && <span style={pillStyle("#000")}>🚨 ESCALATED</span>}
-                      <span style={pillStyle("#263238")}>👷 {getAnalystDisplayLabel(gallerySelected.assignedTo, users)}</span>
+                      <span style={pillStyle("#263238")}>👤 {getAnalystDisplayLabel(gallerySelected.assignedTo, users)}</span>
                     </div>
 
                     <div style={{ opacity: 0.9 }}>
@@ -2152,10 +2100,10 @@ ${Object.entries(stats.byUrgency).length
         </div>
       )}
       {/* Phase 6: Investigation Panel Overlay */}
-      {investigateIssue && (
+      {activeInvestigateIssue && (
         <InvestigationPanel
-          issue={investigateIssue}
-          onClose={() => setInvestigateIssue(null)}
+          issue={activeInvestigateIssue}
+          onClose={() => setInvestigateIssueId(null)}
         />
       )}
     </div>
