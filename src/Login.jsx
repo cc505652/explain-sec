@@ -139,55 +139,6 @@ const Login = ({ onLoginSuccess }) => {
           </button>
         </form>
 
-        {/* Quick Login Buttons — Development only */}
-        {import.meta.env.DEV && (
-        <div style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-          <p style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-            <span style={{ background: 'rgba(255,152,0,0.2)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', color: '#ffb74d', marginRight: '6px' }}>DEV</span>
-            SOC Workflow Roles
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-            {Object.entries(QUICK_LOGIN_ACCOUNTS).map(([role, acct]) => {
-              const colorMap = {
-                admin: { bg: 'rgba(25, 118, 210, 0.2)', border: 'rgba(25, 118, 210, 0.5)', text: '#64b5f6' },
-                soc_manager: { bg: 'rgba(156, 39, 176, 0.2)', border: 'rgba(156, 39, 176, 0.5)', text: '#ce93d8' },
-                soc_l1: { bg: 'rgba(0, 150, 136, 0.2)', border: 'rgba(0, 150, 136, 0.5)', text: '#80cbc4' },
-                soc_l2: { bg: 'rgba(211, 47, 47, 0.2)', border: 'rgba(211, 47, 47, 0.5)', text: '#ef5350' },
-                ir: { bg: 'rgba(255, 152, 0, 0.2)', border: 'rgba(255, 152, 0, 0.5)', text: '#ffb74d' },
-                threat_hunter: { bg: 'rgba(63, 81, 181, 0.2)', border: 'rgba(63, 81, 181, 0.5)', text: '#7986cb' },
-                student: { bg: 'rgba(56, 142, 60, 0.2)', border: 'rgba(56, 142, 60, 0.5)', text: '#81c784' },
-              };
-              const c = colorMap[role] || colorMap.student;
-              return (
-                <button
-                  key={role}
-                  onClick={() => quickLogin(role)}
-                  disabled={loading}
-                  style={{
-                    background: c.bg,
-                    border: `1px solid ${c.border}`,
-                    color: c.text,
-                    padding: '8px 10px',
-                    borderRadius: '8px',
-                    fontSize: '0.78rem',
-                    cursor: loading ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '5px',
-                    transition: 'all 0.2s ease',
-                  }}
-                  title={acct.email}
-                >
-                  <span className="material-symbols-rounded" style={{ fontSize: '15px' }}>{acct.icon}</span>
-                  {acct.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        )}
-
         {/* Footer */}
         <div style={{ textAlign: 'center', marginTop: '2rem' }}>
           <p style={{ fontSize: '0.8rem', color: '#475569', marginBottom: '0.5rem' }}>
