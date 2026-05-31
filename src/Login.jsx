@@ -11,58 +11,6 @@ const Login = ({ onLoginSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
 
-  const quickLogin = async (role) => {
-    setError('');
-    setLoading(true);
-
-    const account = QUICK_LOGIN_ACCOUNTS[role];
-    if (!account) {
-      setError(`Unknown role: ${role}`);
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const userCredential = await signInWithEmailAndPassword(auth, account.email, account.password);
-      console.log(`✅ Quick login as ${role}:`, userCredential.user.email);
-
-      // ── Audit: login success (fire-and-forget) ──
-      logSecurityEvent({
-        actorId: userCredential.user.uid,
-        actorRole: role,
-        action: AUDIT_ACTIONS.LOGIN_SUCCESS,
-        metadata: { email: account.email, method: "quick_login" },
-      });
-
-      setEmail('');
-      setPassword('');
-      if (onLoginSuccess) {
-        onLoginSuccess(userCredential.user);
-      }
-      // Auth state change is detected by AuthProvider.onAuthStateChanged
-    } catch (err) {
-      console.error(`Quick login failed for ${role}:`, err.code, err.message);
-
-      // ── Audit: login failure (fire-and-forget) ──
-      logSecurityEvent({
-        actorId: account.email,
-        actorRole: role,
-        action: AUDIT_ACTIONS.LOGIN_FAILED,
-        status: AUDIT_STATUS.FAILURE,
-        metadata: { email: account.email, method: "quick_login", errorCode: err.code },
-      });
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        setError(`Login failed for ${account.email}. Check that the password is correct.`);
-      } else if (err.code === 'auth/user-not-found') {
-        setError(`Account ${account.email} does not exist. Please create it in the Admin panel first.`);
-      } else {
-        setError('Login failed. Please try again.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
