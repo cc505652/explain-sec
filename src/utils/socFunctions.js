@@ -30,7 +30,14 @@ async function getTrueUserRole(uid) {
   const userDocSnap = await getDoc(userDocRef);
   if (!userDocSnap.exists()) return null;
   const userData = userDocSnap.data();
-  return normalizeRole(userData.team) || normalizeRole(userData.role);
+  
+  const normRole = normalizeRole(userData.role);
+  const normTeam = normalizeRole(userData.team);
+  
+  if (normRole === "soc_manager" || normRole === "admin" || normRole === "ir" || normRole === "threat_hunter") {
+    return normRole;
+  }
+  return normTeam || normRole;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +352,16 @@ export async function callUpdateIncidentStatus(incidentId, nextStatus, note = ""
 
   // Map to action string for state transition validation
   let action = "investigate"; // default generic action
-  if (nextStatus === "in_progress" && currentStatus === "open") action = "start_triage";
+  const normalizedRole = normalizeRole(trueRole);
+  if (nextStatus === "in_progress") {
+    if (normalizedRole === "soc_l1") {
+      action = "start_triage";
+    } else if (normalizedRole === "soc_l2") {
+      action = "continue_investigation";
+    } else {
+      action = "investigate";
+    }
+  }
   else if (nextStatus === "false_positive") action = "mark_false_positive";
   else if (nextStatus === "confirmed_threat") action = "confirm_threat";
   else if (nextStatus === "escalation_pending") action = "request_escalation";

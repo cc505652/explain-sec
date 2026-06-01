@@ -37,7 +37,12 @@ import { computeSLA } from "./utils/slaEngine";
 
 const getCanonicalUserRole = (user) => {
   if (!user) return null;
-  return normalizeRole(user.team) || normalizeRole(user.role);
+  const normRole = normalizeRole(user.role);
+  const normTeam = normalizeRole(user.team);
+  if (normRole === "soc_manager" || normRole === "admin" || normRole === "ir" || normRole === "threat_hunter") {
+    return normRole;
+  }
+  return normTeam || normRole;
 };
 
 const eligiblePIRRoles = ["soc_manager", "soc_l2", "ir", "threat_hunter", "admin"];
@@ -2175,39 +2180,44 @@ export default function AnalystDashboard() {
 
                           {isL1 && (
                             <div style={{ marginTop: 8 }}>
-                              <button
-                                onClick={() => startTriage(issue.id)}
-                                data-testid="start-triage"
-                                style={{
-                                  background: "var(--primary)",
-                                  color: "#fff",
-                                  border: "none",
-                                  padding: "6px 12px",
-                                  borderRadius: 4,
-                                  fontSize: 11,
-                                  fontWeight: 600,
-                                  cursor: "pointer",
-                                  marginRight: 4
-                                }}
-                              >
-                                📋 Start Triage
-                              </button>
-                              <button
-                                onClick={() => updateTriageStatus(issue.id, "false_positive")}
-                                style={{
-                                  background: "var(--secondary)",
-                                  color: "#fff",
-                                  border: "none",
-                                  padding: "6px 12px",
-                                  borderRadius: 4,
-                                  fontSize: 11,
-                                  fontWeight: 600,
-                                  cursor: "pointer",
-                                  marginRight: 4
-                                }}
-                              >
-                                ✅ Mark False Positive
-                              </button>
+                              {(issue.status === "open" || issue.status === "assigned") && (
+                                <button
+                                  onClick={() => startTriage(issue.id)}
+                                  data-testid="start-triage"
+                                  style={{
+                                    background: "var(--primary)",
+                                    color: "#fff",
+                                    border: "none",
+                                    padding: "6px 12px",
+                                    borderRadius: 4,
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                    marginRight: 4
+                                  }}
+                                >
+                                  📋 Start Triage
+                                </button>
+                              )}
+                              {(issue.status === "assigned" || issue.status === "in_progress") && (
+                                <button
+                                  onClick={() => updateTriageStatus(issue.id, "false_positive")}
+                                  data-testid="mark-false-positive"
+                                  style={{
+                                    background: "var(--secondary)",
+                                    color: "#fff",
+                                    border: "none",
+                                    padding: "6px 12px",
+                                    borderRadius: 4,
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                    marginRight: 4
+                                  }}
+                                >
+                                  ✅ Mark False Positive
+                                </button>
+                              )}
                               {issue.status === "in_progress" && issue.triageStatus !== "confirmed_threat" && (
                                 <button
                                   disabled={issue.locked === true}

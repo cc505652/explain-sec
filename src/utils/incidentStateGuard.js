@@ -187,6 +187,9 @@ export function isValidTransition(currentStatus, nextStatus) {
   // Same-state is always valid (idempotent writes)
   if (currentStatus === nextStatus) return true;
 
+  // Convert to Threat Hunt is allowed from any status at any point
+  if (nextStatus === "threat_hunt") return true;
+
   const allowed = INCIDENT_TRANSITIONS[currentStatus];
   if (!allowed) return false;
 

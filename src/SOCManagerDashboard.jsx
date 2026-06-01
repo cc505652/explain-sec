@@ -37,7 +37,12 @@ import { logLifecycleAudit, logContainmentAudit, logGovernanceAudit, logAssignme
 
 const getCanonicalUserRole = (user) => {
   if (!user) return null;
-  return normalizeRole(user.team) || normalizeRole(user.role);
+  const normRole = normalizeRole(user.role);
+  const normTeam = normalizeRole(user.team);
+  if (normRole === "soc_manager" || normRole === "admin" || normRole === "ir" || normRole === "threat_hunter") {
+    return normRole;
+  }
+  return normTeam || normRole;
 };
 
 const eligiblePIRRoles = ["soc_manager", "soc_l2", "ir", "threat_hunter", "admin"];
@@ -2508,26 +2513,28 @@ export default function SOCManagerDashboard() {
                         >
                           Close Incident
                         </button>
-                        <button
-                          disabled={!authorized}
-                          style={{
-                            padding: "6px 12px",
-                            borderRadius: "4px",
-                            background: "rgba(139,92,246,0.2)",
-                            color: "#fff",
-                            border: "1px solid rgba(139,92,246,0.3)",
-                            cursor: "pointer"
-                          }}
-                          onClick={() => convertToThreatHunt(incident.id)}
-                        >
-                          Convert to Threat Hunt
-                        </button>
                       </>
                     )}
                     {incident.status === "containment_executed" && (
                       <span style={{ color: "#aaa", fontSize: "12px", padding: "6px 12px" }}>
                         ✅ Containment executed
                       </span>
+                    )}
+                    {authorized && incident.status !== "threat_hunt" && (
+                      <button
+                        disabled={!authorized}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: "4px",
+                          background: "rgba(139,92,246,0.2)",
+                          color: "#fff",
+                          border: "1px solid rgba(139,92,246,0.3)",
+                          cursor: "pointer"
+                        }}
+                        onClick={() => convertToThreatHunt(incident.id)}
+                      >
+                        Convert to Threat Hunt
+                      </button>
                     )}
                   </div>
                 </div>

@@ -75,6 +75,9 @@ const TRANSITIONS = {
 };
 
 function validateTransition(from, to) {
+  // Convert to Threat Hunt is allowed from any status at any point
+  if (to === "threat_hunt") return { valid: true };
+
   const allowed = TRANSITIONS[from];
   if (!allowed) return { valid: false, error: `Unknown source state: "${from}"` };
   if (!allowed.includes(to)) {
