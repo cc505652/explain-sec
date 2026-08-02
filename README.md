@@ -928,8 +928,6 @@ Documentation, architecture, source code, screenshots, and automated test result
 
 ## 🔮 Roadmap
 
-## 🔮 Roadmap
-
 ### Phase 3 — Enterprise Integration & Cloud Security Architecture
 
 Build ExplainSec into a platform capable of ingesting and correlating real security telemetry.
