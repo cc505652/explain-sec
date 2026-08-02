@@ -87,7 +87,7 @@ Every stage has defined role boundaries, valid transitions, mandatory justificat
 │                                                                                         │
 │  ┌──────────────────────────────┐              ┌─────────────────────────────────────┐  │
 │  │    Enterprise Generator      │              │       Dynamic Attack Composer       │  │
-│  │ (95–98% Benign Noise Model)  │              │    (0–5 Adversary FSM Chains)        │  │
+│  │ (95–98% Benign Noise Model)  │              │    (0–5 Adversary FSM Chains)       │  │
 │  │ 23+ Providers (Sysmon, AD,   │              │ Attacker Profiles (APT, Ransomware, │  │
 │  │ CloudTrail, Entra ID, etc.)  │              │ Script Kiddie, Insider, etc.)       │  │
 │  └──────────────┬───────────────┘              └──────────────────┬──────────────────┘  │
@@ -123,7 +123,7 @@ Every stage has defined role boundaries, valid transitions, mandatory justificat
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                       SOC GOVERNANCE PLATFORM (Phase 1 Foundation)                     │
+│                       SOC GOVERNANCE PLATFORM (Phase 1 Foundation)                      │
 │                                                                                         │
 │  ┌───────────────────────────────────────────────────────────────────────────────────┐  │
 │  │                        REACT FRONTEND                                             │  │
@@ -152,18 +152,18 @@ Every stage has defined role boundaries, valid transitions, mandatory justificat
 │  │  │  ├─ ACCEPT_RISK            ├─ TAG_RCA          ├─ TAG_PIR                  │   │  │
 │  │  └────────────────────────────────────────────────────────────────────────────┘   │  │
 │  │                                                                                   │  │
-│  │  escalateIncident    approveEscalation   denyEscalation                          │  │
-│  │  performContainment  approveContainment  lockIncident                            │  │
-│  │  updateRole          updateIncidentStatus                                        │  │
+│  │  escalateIncident    approveEscalation   denyEscalation                           │  │
+│  │  performContainment  approveContainment  lockIncident                             │  │
+│  │  updateRole          updateIncidentStatus                                         │  │
 │  │                                                                                   │  │
-│  │  Security layers applied to EVERY function:                                      │  │
-│  │  1. Firebase Auth token verification                                             │  │
-│  │  2. Role fetched from Firestore via Admin SDK                                    │  │
-│  │  3. Governance lock check (assertNotLocked)                                      │  │
-│  │  4. State machine validation (TRANSITIONS map)                                   │  │
+│  │  Security layers applied to EVERY function:                                       │  │
+│  │  1. Firebase Auth token verification                                              │  │
+│  │  2. Role fetched from Firestore via Admin SDK                                     │  │
+│  │  3. Governance lock check (assertNotLocked)                                       │  │
+│  │  4. State machine validation (TRANSITIONS map)                                    │  │
 │  │  5. Mandatory reason enforcement                                                  │  │
-│  │  6. Idempotency guard                                                            │  │
-│  │  7. writeAuditLog (immutable — client cannot forge)                              │  │
+│  │  6. Idempotency guard                                                             │  │
+│  │  7. writeAuditLog (immutable — client cannot forge)                               │  │
 │  └───────────────────────────────────────────────────────────────────────────────────┘  │
 │                      │  Admin SDK (bypasses Firestore rules)                            │
 │                      ▼                                                                  │
@@ -175,10 +175,10 @@ Every stage has defined role boundaries, valid transitions, mandatory justificat
 │  │  /audit_logs/{id}              Immutable Forensic Audit Log                       │  │
 │  │  /telemetry_simulations        Firestore Simulation Archive Metadata              │  │
 │  │  /telemetry_simulation_events  Persisted Historical Telemetry Stream              │  │
-│  │  /users/{uid}                  User profiles + roles (RBAC source)               │  │
-│  │  /notifications/{id}           Role-scoped real-time alerts                      │  │
-│  │  /roles/{id}                   Role definitions                                  │  │
-│  │  /config/{id}                  Platform configuration                            │  │
+│  │  /users/{uid}                  User profiles + roles (RBAC source)                │  │
+│  │  /notifications/{id}           Role-scoped real-time alerts                       │  │
+│  │  /roles/{id}                   Role definitions                                   │  │
+│  │  /config/{id}                  Platform configuration                             │  │
 │  └───────────────────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -491,15 +491,15 @@ An attacker must bypass all three simultaneously. Layer 3 always runs Admin SDK,
 ### Escalation Gate (Critical Path)
 
 ```
-L2 Analyst           SOC Manager          IR Team
-    │                    │                    │
-    │ escalateIncident()  │                    │
-    ├───────────────────► │                    │
+L2 Analyst           SOC Manager            IR Team
+    │                    │                     │
+    │ escalateIncident() │                     │
+    ├───────────────────►│                     │
     │                    │ approveEscalation() │
     │                    ├───────────────────► │
     │                    │  (or denyEscalation)│
-    │                    │                    │ performContainment()
-    │                    │ ◄──────────────────┤
+    │                    │                     │ performContainment()
+    │                    │ ◄────────────────── ┤
     │                    │ approveContainment()│
     │                    ├───────────────────► │
     │                 resolved                 │
@@ -864,62 +864,22 @@ From a 25-endpoint branch office to a 1,000+ endpoint Fortune 500 global enterpr
 ```
 
 ---
+## 🚀 Project Availability
 
-## 🚦 Getting Started
+ExplainSec is currently released as a portfolio and research project.
 
-### Prerequisites
+The public repository is intended to showcase:
 
-- Node.js 18+
-- Firebase CLI (`npm install -g firebase-tools`)
-- A Firebase project with Firestore, Functions, and Authentication enabled
+- Enterprise-grade SOC architecture
+- Dynamic telemetry simulation
+- Emergent correlation engine
+- Server-enforced governance model
+- System design and implementation
+- Automated verification
 
-> ⚠️ Full RBAC enforcement and telemetry archive require Firebase setup. This project prioritizes secure deployment over plug-and-play simplicity.
+The complete production environment depends on Firebase infrastructure, Cloud Functions, Firestore configuration, authentication, and supporting services that are intentionally not packaged as a one-command deployment.
 
-### Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/cc505652/explain-sec.git
-cd explain-sec
-
-# Install frontend dependencies
-npm install
-
-# Install Cloud Functions dependencies
-cd functions && npm install && cd ..
-
-# Set your Firebase project
-firebase use --add
-
-# Set the Gemini API key secret (for AI narration)
-firebase functions:secrets:set GEMINI_API_KEY
-
-# Deploy everything
-firebase deploy
-```
-
-### Local Development
-
-```bash
-# Start the frontend dev server
-npm run dev
-
-# Emulate Cloud Functions locally (separate terminal)
-firebase emulators:start --only functions,firestore
-```
-
-### Run Tests
-
-```bash
-# Full cross-browser suite
-npx playwright test --workers=1
-
-# Phase 2 telemetry subsystems only
-npx playwright test tests/correlationEngine.spec.js tests/l1-flow.spec.js --workers=1 --project=chromium
-
-# Specific subsystem
-npx playwright test tests/correlation/emergentCorrelation.spec.js --workers=1
-```
+Documentation, architecture, source code, screenshots, and automated test results are provided to demonstrate the platform's capabilities.
 
 ---
 
