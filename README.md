@@ -928,25 +928,93 @@ Documentation, architecture, source code, screenshots, and automated test result
 
 ## 🔮 Roadmap
 
-### Phase 3 — SIEM Connectors & Cloud Security Architecture
+## 🔮 Roadmap
 
-- **SecRule Integration**: Detection Rule Studio — author rules in the SecRule vendor-neutral detection language, compile to Splunk SPL / Microsoft KQL / Elastic ES|QL / Sigma / Chronicle YARA-L directly within ExplainSec
-- **Sentrix SIEM Integration**: Ingest real Sentrix SIEM alerts directly into `TelemetryBus`
-- **Syslog & REST Connectors**: Direct HTTP/Syslog ingestion endpoint for external network appliances
-- **AWS CloudTrail Real Ingestion**: Ingest live CloudTrail JSON events into `EntityRegistry`
-- **Azure / Entra ID Simulation**: Conditional access, privileged identity management simulation
-- **Attack Path Visualization**: Upgrade SVG correlation graph to D3/React Flow with interactive lateral movement chains
-- **Threat Intelligence Pipeline**: IOC ingestion, enrichment, ATT&CK correlation
+### Phase 3 — Enterprise Integration & Cloud Security Architecture
 
-### Phase 4 — Elite Security Platform
+Build ExplainSec into a platform capable of ingesting and correlating real security telemetry.
 
-- SOAR automation engine with playbook execution
-- AI-assisted triage and investigation (Gemini integration)
-- Detection engineering lab
-- Security data lake simulation
-- Purple-team simulation environment
-- Multi-tenant SOC architecture
+- **Real SIEM Connectors**
+  - Syslog Connector
+  - REST API Connector
+  - Webhook Connector
+  - Cloud-native ingestion adapters
 
+- **Cloud Security Architecture**
+  - AWS CloudTrail ingestion
+  - Microsoft Entra ID & Azure Activity Logs
+  - Azure Key Vault telemetry
+  - Microsoft 365 audit logs
+  - Kubernetes audit logs
+  - Multi-cloud normalization
+
+- **Detection Engineering**
+  - Detection Rule Studio (SecRule)
+  - Rule compiler for Sigma, Microsoft KQL, Splunk SPL, Elastic ES|QL, Chronicle YARA-L
+  - Rule validation and testing
+  - Detection versioning
+
+- **Threat Intelligence**
+  - IOC ingestion pipeline
+  - Threat intelligence enrichment
+  - ATT&CK mapping improvements
+  - Reputation and indicator correlation
+
+- **Enterprise Visualization**
+  - Interactive attack-path visualization
+  - Enhanced entity relationship explorer
+  - Investigation graph improvements
+  - Analyst investigation workspace
+
+---
+
+### Phase 4 — ExplainSec Enterprise Security Platform
+
+Evolve ExplainSec from a SOC simulator into a complete security operations platform.
+
+- **SOAR Platform**
+  - Automated playbooks
+  - Response orchestration
+  - Approval workflows
+  - Human-in-the-loop automation
+
+- **Threat Hunting Platform**
+  - Advanced hunt workspace
+  - Hypothesis-driven investigations
+  - Cross-incident analytics
+  - Hunt case management
+
+- **Detection Engineering Lab**
+  - Rule development environment
+  - Replay-based validation
+  - Detection effectiveness metrics
+  - False-positive analysis
+
+- **Security Data Platform**
+  - Long-term telemetry storage
+  - Security data lake
+  - Historical analytics
+  - Trend analysis
+
+- **Purple Team Platform**
+  - Attack simulation
+  - Detection validation
+  - Defensive effectiveness measurement
+  - Continuous security assessment
+
+- **Enterprise Architecture**
+  - Multi-tenant architecture
+  - API Gateway
+  - Identity federation
+  - Zero Trust architecture
+  - Enterprise RBAC
+  - Scalable distributed deployment
+
+---
+
+> **🧩 Looking Beyond the Roadmap**
+>
+> ExplainSec's modular architecture has been intentionally designed to support future research into projects such as **Sentrix** (next-generation SIEM & honeypot telemetry) and **SecRule** (vendor-neutral detection engineering with cross-platform rule compilation). More details will be shared as these projects mature.
 ---
 
 ## 📄 License
