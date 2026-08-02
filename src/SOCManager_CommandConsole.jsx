@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { app, auth, db } from "./firebase";
 import { normalizeRole } from "./utils/normalizeRole";
+import { isVisibleToRole } from "./utils/roleNormalization";
 import {
   callUpdateIncidentStatus,
   callEscalateIncident,
@@ -454,6 +455,7 @@ export default function SOCManager_CommandConsole() {
   const visibleIssues = useMemo(() => {
     if (normalizeRole(userRole) === "soc_l2") {
       return issues.filter((i) =>
+        isVisibleToRole(i, "soc_l2") &&
         i.status !== "false_positive" &&
         i.status !== "resolved" &&
         i.status !== "closed" &&

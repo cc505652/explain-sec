@@ -70,6 +70,7 @@ export async function logout(page) {
  */
 export async function quickLogin(page, role) {
   const credentials = {
+    student: { email: 'analyst@explainsec.com', password: 'test1234', route: '/' },
     soc_l1: { email: 'analyst@explainsec.com', password: 'test1234', route: '/' },
     soc_l2: { email: 'analyst1@explainsec.com', password: 'test1234', route: '/' },
     soc_manager: { email: 'cc505652@gmail.com', password: 'test1234', route: '/soc-manager' },

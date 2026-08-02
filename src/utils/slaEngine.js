@@ -34,6 +34,7 @@ function tsToMs(ts) {
   if (ts.seconds) return ts.seconds * 1000;
   if (ts instanceof Date) return ts.getTime();
   if (typeof ts === "string") return new Date(ts).getTime();
+  if (typeof ts === "object" && (ts._methodName === "serverTimestamp" || ts.nanoseconds !== undefined)) return Date.now();
   return 0;
 }
 
@@ -62,20 +63,7 @@ function formatDuration(ms) {
  */
 export function computeSLA(issue, config = DEFAULT_SLA_HOURS) {
   const now = Date.now();
-  const createdMs = tsToMs(issue.createdAt);
-
-  if (!createdMs) {
-    return {
-      status: "unknown",
-      label: "SLA: —",
-      color: "#64748b",
-      breached: false,
-      atRisk: false,
-      remainingMs: 0,
-      deadlineMs: 0,
-      overridden: false,
-    };
-  }
+  const createdMs = tsToMs(issue.createdAt) || tsToMs(issue.updatedAt) || now;
 
   // Already resolved / closed states — SLA complete
   const CLOSED_STATES = [
@@ -91,12 +79,12 @@ export function computeSLA(issue, config = DEFAULT_SLA_HOURS) {
       atRisk: false,
       remainingMs: 0,
       deadlineMs: 0,
-      overridden: issue.slaOverride || false,
+      overridden: issue.slaOverride || issue.slaOverridden || false,
     };
   }
 
   // SLA override check
-  if (issue.slaOverride) {
+  if (issue.slaOverride || issue.slaOverridden) {
     return {
       status: "overridden",
       label: `SLA: Overridden`,
@@ -106,7 +94,7 @@ export function computeSLA(issue, config = DEFAULT_SLA_HOURS) {
       remainingMs: 0,
       deadlineMs: 0,
       overridden: true,
-      overrideReason: issue.slaOverrideReason || "No reason provided",
+      overrideReason: issue.slaOverrideReason || "Manager Override",
     };
   }
 
@@ -114,18 +102,25 @@ export function computeSLA(issue, config = DEFAULT_SLA_HOURS) {
   let deadlineMs = 0;
   let referenceMs = createdMs;
 
-  if (issue.status === "open") {
+  const ACTIVE_INVESTIGATION_STATES = [
+    "in_progress", "confirmed_threat", "investigation_l2",
+    "escalation_requested", "escalation_pending", "escalation_approved", "escalation_denied",
+    "containment_pending_approval", "containment_in_progress", "containment_action_submitted",
+    "containment_approved", "containment_rejected", "containment_review_again", "containment_executed",
+    "ir_in_progress", "threat_hunt", "containment_pending"
+  ];
+
+  if (issue.status === "open" || issue.status === "reopened") {
     deadlineMs = createdMs + (config.open || 24) * MS_HOUR;
   } else if (issue.status === "assigned") {
     const assignedMs = tsToMs(issue.assignedAt) || createdMs;
     referenceMs = assignedMs;
     deadlineMs = assignedMs + (config.assigned || 48) * MS_HOUR;
-  } else if (issue.status === "in_progress" || issue.status === "confirmed_threat") {
+  } else if (ACTIVE_INVESTIGATION_STATES.includes(issue.status)) {
     const assignedMs = tsToMs(issue.assignedAt) || createdMs;
     referenceMs = assignedMs;
     deadlineMs = assignedMs + (config.in_progress || 72) * MS_HOUR;
   } else {
-    // Other active states (escalation_pending, ir_in_progress, etc.)
     deadlineMs = createdMs + (config.assigned || 48) * MS_HOUR;
   }
 

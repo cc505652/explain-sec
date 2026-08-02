@@ -122,10 +122,10 @@ export function isNormalizedRole(role) {
 export function getVisibleToForStatus(status) {
   const statusVisibilityRules = {
     // Initial states
-    open: ["soc_l1", "soc_l2", "soc_manager"],
-    assigned: ["soc_l1", "soc_l2", "soc_manager"],
-    in_progress: ["soc_l1", "soc_l2", "soc_manager"],
-    escalation_requested: ["soc_l1", "soc_l2", "soc_manager"],
+    open: ["soc_l1", "soc_manager"],
+    assigned: ["soc_l1", "soc_manager"],
+    in_progress: ["soc_l1", "soc_manager"],
+    escalation_requested: ["soc_l1", "soc_manager"],
 
     // Investigation states
     confirmed_threat: ["soc_l2", "soc_manager"],

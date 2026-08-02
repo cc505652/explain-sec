@@ -8,6 +8,7 @@ import AdminDashboard from "./AdminDashboard"; // Admin Dashboard
 import SOCManager_CommandConsole from "./SOCManager_CommandConsole"; // SOC Manager Console
 import SOCManagerDashboard from "./SOCManagerDashboard"; // SOC Manager Dashboard
 import AnalyticsPanel from "./components/AnalyticsPanel"; // Phase 3: Analytics
+import { SecurityOperationsConsole } from "./components/telemetry/SecurityOperationsConsole";
 import Logout from "./Logout";
 import { auth, db } from "./firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
@@ -223,12 +224,8 @@ function AppContent() {
           />
         </Routes>
 
-        {normalizeRole(role) === "student" && (
-          <>
-            <SubmitIssue />
-            <hr />
-            <IssueList />
-          </>
+        {["student", "soc_l1", "soc_l2", "ir", "threat_hunter"].includes(normalizeRole(role)) && location.pathname === "/" && (
+          <SecurityOperationsConsole userRole={role} currentUser={user} />
         )}
 
         {/* SOC ANALYST CONSOLE - For all operational roles */}

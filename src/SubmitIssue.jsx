@@ -123,6 +123,7 @@ export default function SubmitIssue() {
 
         autoReason: aiReason,
         aiEngine: aiSource, // 🔥 shows if rules were used
+        incidentSource: "manual",
         isDeleted: false
       });
 

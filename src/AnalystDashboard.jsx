@@ -1666,7 +1666,10 @@ export default function AnalystDashboard() {
                         </div>
 
                         {/* 🔹 STEP 3 — Add IR Containment Panel in Incident Card */}
-                        {isIR && (
+                        {/* 🔹 STEP 3 — Add IR Containment Panel in Incident Card */}
+                        {isIR && (!["resolved", "closed", "completed", "false_positive", "risk_accepted"].includes(issue.status) && !issue.isDeleted) && (
+                          (normalizeRole(issue.assignedTo) === "ir" || normalizeRole(issue.escalatedTo) === "ir" || issue.assignedTo === "IR Team" || issue.escalationApproved === true || ["escalation_approved", "ir_in_progress", "containment_pending_approval", "containment_in_progress", "containment_action_submitted", "containment_approved", "containment_rejected", "containment_review_again", "containment_executed", "containment_pending"].includes(issue.status))
+                        ) && (
                           <div style={{ marginTop: 10, padding: 8, background: "rgba(0,0,0,0.05)", borderRadius: 4 }}>
                             <b style={{ fontSize: 12, color: "var(--text-main)", marginBottom: 4 }}>Containment Actions</b>
 
@@ -1680,8 +1683,8 @@ export default function AnalystDashboard() {
                               </div>
                             )}
 
-                            {/* Show submit buttons when IR can submit action (in_progress or rejected only, not review_again) */}
-                            {(issue.status === "containment_in_progress" || issue.status === "containment_rejected") && (
+                            {/* Show submit buttons when IR can submit action (active IR state, not pending manager review) */}
+                            {issue.status !== "containment_action_submitted" && issue.status !== "containment_approved" && (
                               <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
                                 <button
                                   disabled={issue.locked === true}

@@ -12,7 +12,7 @@ test.describe('L2 Workflow', () => {
   test.afterEach(async ({ page }) => {
     console.log('TEST CLEANUP: Logging out');
     try {
-      await page.goto('/');
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
     } catch (error) {
       console.log('TEST CLEANUP: Already logged out');
     }
@@ -67,7 +67,7 @@ test.describe('L2 Workflow', () => {
       await page.waitForTimeout(3000);
       
       // Logout as L2
-      await page.goto('/');
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
       
       // Login as manager
       await quickLogin(page, 'soc_manager');
@@ -147,7 +147,7 @@ test.describe('L2 Workflow', () => {
       await page.waitForTimeout(3000);
       
       // Logout as L2
-      await page.goto('/');
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
       
       // Login as manager
       await quickLogin(page, 'soc_manager');
