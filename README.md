@@ -1,22 +1,25 @@
-# 🛡️ ExplainSec — Security Operations Platform
+# 🛡️ ExplainSec — Enterprise Security Operations & Dynamic Telemetry Platform
 
-> A production-grade Security Operations Platform modeling real-world SOC workflows: incident response, threat hunting, governance, post-incident review, and root cause analysis — with server-enforced authorization, immutable audit logging, and lifecycle-driven orchestration.
+> A production-grade Security Operations Center (SOC) platform and dynamic enterprise telemetry simulation engine modeling real-world incident response, 15-dimension emergent correlation, state-machine adversary composition, entity relationship tracking, and server-enforced governance.
 
-![version](https://img.shields.io/badge/version-v1.0.0-blue)
-![status](https://img.shields.io/badge/phase-1%20final%20stable-brightgreen)
-![tests](https://img.shields.io/badge/tests-465%2F465-brightgreen)
+![version](https://img.shields.io/badge/version-v2.0.0-blue)
+![phase](https://img.shields.io/badge/phase--2-operational%20complete-brightgreen)
+![tests](https://img.shields.io/badge/tests-1188%2F1188-brightgreen)
 ![security](https://img.shields.io/badge/security-server%20enforced-red)
-![architecture](https://img.shields.io/badge/architecture-SOC%20platform-blueviolet)
+![architecture](https://img.shields.io/badge/architecture-SOC%20%2B%20SIEM%20Telemetry-blueviolet)
+![browsers](https://img.shields.io/badge/browsers-chromium%20%7C%20firefox%20%7C%20webkit-orange)
+![coverage](https://img.shields.io/badge/coverage-97.2%25%20statement-brightgreen)
 
 ---
 
 ## 🚀 Project Overview
 
-ExplainSec is a full-stack Security Operations Center platform that models the complete lifecycle of a security incident — from initial triage through investigation, escalation, containment, governance, threat hunting, post-incident review, and root cause analysis.
+**ExplainSec** is a full-stack Security Operations Center (SOC) platform and dynamic enterprise telemetry simulation engine. It models the complete lifecycle of a security incident — from raw multi-provider log ingestion, entity linking, 15-dimension emergent correlation, and risk evolution, through to server-enforced triage, investigation, escalation, containment, threat hunting, post-incident review (PIR), and root cause analysis (RCA).
 
-The platform is built around one core principle:
+The platform operates on two core engineering principles:
 
-> Every security-relevant write goes through a Cloud Function. The client is untrusted.
+> 1. **Server-Enforced Governance**: Every security-relevant write goes through a Cloud Function. The client is untrusted.
+> 2. **Emergent Telemetry Correlation**: Telemetry does not replay fixed stories. An independent Enterprise Generator emits 95–98% benign operational noise across 23+ providers, while a State Machine Attack Composer simulates adversary chains. The Correlation Engine discovers attacks dynamically via shared entities and risk progression — without hardcoded campaign identifiers.
 
 Most security projects stop at detection. ExplainSec starts where detection ends:
 
@@ -24,17 +27,24 @@ Most security projects stop at detection. ExplainSec starts where detection ends
 - Which state transitions are valid, and who can trigger them?
 - How is every decision recorded, audited, and made forensically reliable?
 - How does a SOC team formally review, learn from, and close an incident?
-
-This project models operational reality — not just alerts, but decisions, approvals, governance holds, and accountability chains.
+- How does a SIEM-scale telemetry engine generate realistic enterprise noise and emergent attack signals?
 
 ---
 
 ## 🎯 Why This Project Exists
 
-Real SOC operations involve layered workflows that most security tooling either ignores or simplifies beyond recognition. ExplainSec was built to model the full operational picture:
+Real SOC operations involve layered workflows that most security tooling either ignores or simplifies beyond recognition. ExplainSec was built to model the full operational picture — from raw telemetry to governance:
 
 ```
-Detection
+Raw Enterprise Telemetry (23+ Providers)
+    ↓
+8-Stage Orchestration Pipeline
+    ↓
+15-Dimension Emergent Correlation + Entity Registry
+    ↓
+Dynamic Risk Evolution  R ∈ [0, 100]
+    ↓
+Qualified Incident Creation (Canonical Phase 1 Document)
     ↓
 Triage & Classification          (L1 Analyst)
     ↓
@@ -51,7 +61,7 @@ Resolution
 Post-Incident Review / RCA / Risk Acceptance   (decoupled branches)
 ```
 
-Every stage has defined role boundaries, valid transitions, mandatory justifications, and immutable audit records. That is what this platform simulates.
+Every stage has defined role boundaries, valid transitions, mandatory justifications, and immutable audit records.
 
 ---
 
@@ -69,65 +79,108 @@ Every stage has defined role boundaries, valid transitions, mandatory justificat
 
 ---
 
-## 🏗 Architecture
+## 🏗 High-Level System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        REACT FRONTEND                           │
-│                                                                 │
-│  StudentDashboard   L1Dashboard    L2Dashboard                  │
-│  IRDashboard        ThreatHunterDashboard                       │
-│  SOCManagerDashboard   AdminDashboard                           │
-│  SOCManager_CommandConsole                                      │
-│                                                                 │
-│  ┌────────────────────────────────────┐                         │
-│  │       Client-Side Wrappers         │                         │
-│  │   src/utils/socFunctions.js        │                         │
-│  │   callGovernanceAction()           │                         │
-│  │   callApproveEscalation()          │                         │
-│  │   callApproveContainment()  ...    │                         │
-│  └────────────────┬───────────────────┘                         │
-└───────────────────┼─────────────────────────────────────────────┘
-                    │  Firebase Callable Functions (HTTPS)
-                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    FIREBASE CLOUD FUNCTIONS                     │
-│                   functions/socActions.js                       │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  governanceActions (unified dispatcher)                  │   │
-│  │  ├─ OVERRIDE_DECISION      ├─ SLA_OVERRIDE               │   │
-│  │  ├─ TRANSFER_OWNERSHIP     ├─ CONVERT_TO_THREAT_HUNT     │   │
-│  │  ├─ REOPEN_INCIDENT        ├─ REJECT_CONTAINMENT         │   │
-│  │  ├─ ACCEPT_RISK            ├─ TAG_RCA    ├─ TAG_PIR      │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  escalateIncident    approveEscalation   denyEscalation         │
-│  performContainment  approveContainment  lockIncident           │
-│  updateRole          updateIncidentStatus                       │
-│                                                                 │
-│  Security layers applied to EVERY function:                     │
-│  1. Firebase Auth token verification                            │
-│  2. Role fetched from Firestore via Admin SDK                   │
-│  3. Governance lock check (assertNotLocked)                     │
-│  4. State machine validation (TRANSITIONS map)                  │
-│  5. Mandatory reason enforcement                                │
-│  6. Idempotency guard                                           │
-│  7. writeAuditLog (immutable — client cannot forge)             │
-└─────────────────────────────────────────────────────────────────┘
-                    │  Admin SDK (bypasses Firestore rules)
-                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        FIRESTORE                                │
-│                                                                 │
-│  /issues/{id}            Incident documents                     │
-│  /incident_timeline/{id} Immutable chronological event log      │
-│  /users/{uid}            User profiles + roles (RBAC source)    │
-│  /audit_logs/{id}        Immutable (client create/update: false)│
-│  /notifications/{id}     Role-scoped real-time alerts           │
-│  /roles/{id}             Role definitions                       │
-│  /config/{id}            Platform configuration                 │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                             ENTERPRISE TELEMETRY ENGINE                                 │
+│                                                                                         │
+│  ┌──────────────────────────────┐              ┌─────────────────────────────────────┐  │
+│  │    Enterprise Generator      │              │       Dynamic Attack Composer       │  │
+│  │ (95–98% Benign Noise Model)  │              │    (0–5 Adversary FSM Chains)        │  │
+│  │ 23+ Providers (Sysmon, AD,   │              │ Attacker Profiles (APT, Ransomware, │  │
+│  │ CloudTrail, Entra ID, etc.)  │              │ Script Kiddie, Insider, etc.)       │  │
+│  └──────────────┬───────────────┘              └──────────────────┬──────────────────┘  │
+│                 │                                                 │                     │
+│                 └───────────────────────┬─────────────────────────┘                     │
+│                                         │ SecurityEvent Payload                         │
+│                                         ▼                                               │
+│                                 ┌──────────────┐                                        │
+│                                 │ TelemetryBus │                                        │
+│                                 └──────┬───────┘                                        │
+└────────────────────────────────────────┼────────────────────────────────────────────────┘
+                                         │
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                             TELEMETRY ORCHESTRATOR PIPELINE                             │
+│                                                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌───────────────────────┐  │
+│  │ Standardizer │ ──►│  Enrichment  │ ──►│Classification│ ──►│   Detection Engine    │  │
+│  └──────────────┘    └──────────────┘    └──────────────┘    └───────────┬───────────┘  │
+│                                                                          │              │
+│                                                                          ▼              │
+│  ┌──────────────────────┐    ┌──────────────────────┐    ┌───────────────────────────┐  │
+│  │ Qualification Engine │◄───│  Risk Evolution      │◄───│  Emergent Correlation     │  │
+│  └──────────┬───────────┘    │  (Dynamic R∈[0,100]) │    │  (15-Dimension + Entity)  │  │
+│             │                └──────────────────────┘    └───────────▲───────────────┘  │
+│             │ Qualified Cluster                                      │                  │
+│             ▼                                                        │ Entity Index     │
+│  ┌─────────────────────────────────────┐                  ┌──────────┴──────────┐       │
+│  │     Canonical Incident Builder      │                  │   Entity Registry   │       │
+│  │  (Builds Phase 1 Compliant Document)│                  │ (Host, User, IP,    │       │
+│  └──────────────────┬──────────────────┘                  │ Hash, Process, etc.)│       │
+└─────────────────────┼─────────────────────────────────────└─────────────────────┘───────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                       SOC GOVERNANCE PLATFORM (Phase 1 Foundation)                     │
+│                                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                        REACT FRONTEND                                             │  │
+│  │  StudentDashboard   L1Dashboard    L2Dashboard    IRDashboard                     │  │
+│  │  ThreatHunterDashboard   SOCManagerDashboard   AdminDashboard                     │  │
+│  │  SOCManager_CommandConsole   SecurityOperationsConsole                            │  │
+│  │                                                                                   │  │
+│  │  ┌────────────────────────────────────┐                                           │  │
+│  │  │       Client-Side Wrappers         │                                           │  │
+│  │  │   src/utils/socFunctions.js        │                                           │  │
+│  │  │   callGovernanceAction()           │                                           │  │
+│  │  │   callApproveEscalation()          │                                           │  │
+│  │  │   callApproveContainment()  ...    │                                           │  │
+│  │  └────────────────┬───────────────────┘                                           │  │
+│  └───────────────────┼───────────────────────────────────────────────────────────────┘  │
+│                      │  Firebase Callable Functions (HTTPS)                             │
+│                      ▼                                                                  │
+│  ┌───────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                    FIREBASE CLOUD FUNCTIONS                                       │  │
+│  │                   functions/socActions.js                                         │  │
+│  │                                                                                   │  │
+│  │  ┌────────────────────────────────────────────────────────────────────────────┐   │  │
+│  │  │  governanceActions (unified dispatcher)                                    │   │  │
+│  │  │  ├─ OVERRIDE_DECISION      ├─ SLA_OVERRIDE    ├─ TRANSFER_OWNERSHIP        │   │  │
+│  │  │  ├─ CONVERT_TO_THREAT_HUNT ├─ REOPEN_INCIDENT ├─ REJECT_CONTAINMENT        │   │  │
+│  │  │  ├─ ACCEPT_RISK            ├─ TAG_RCA          ├─ TAG_PIR                  │   │  │
+│  │  └────────────────────────────────────────────────────────────────────────────┘   │  │
+│  │                                                                                   │  │
+│  │  escalateIncident    approveEscalation   denyEscalation                          │  │
+│  │  performContainment  approveContainment  lockIncident                            │  │
+│  │  updateRole          updateIncidentStatus                                        │  │
+│  │                                                                                   │  │
+│  │  Security layers applied to EVERY function:                                      │  │
+│  │  1. Firebase Auth token verification                                             │  │
+│  │  2. Role fetched from Firestore via Admin SDK                                    │  │
+│  │  3. Governance lock check (assertNotLocked)                                      │  │
+│  │  4. State machine validation (TRANSITIONS map)                                   │  │
+│  │  5. Mandatory reason enforcement                                                  │  │
+│  │  6. Idempotency guard                                                            │  │
+│  │  7. writeAuditLog (immutable — client cannot forge)                              │  │
+│  └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                      │  Admin SDK (bypasses Firestore rules)                            │
+│                      ▼                                                                  │
+│  ┌───────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                        FIRESTORE                                                  │  │
+│  │                                                                                   │  │
+│  │  /issues/{id}                  Canonical Incidents (written by Incident Generator)│  │
+│  │  /incident_timeline/{id}       Immutable Chronological Event Log                  │  │
+│  │  /audit_logs/{id}              Immutable Forensic Audit Log                       │  │
+│  │  /telemetry_simulations        Firestore Simulation Archive Metadata              │  │
+│  │  /telemetry_simulation_events  Persisted Historical Telemetry Stream              │  │
+│  │  /users/{uid}                  User profiles + roles (RBAC source)               │  │
+│  │  /notifications/{id}           Role-scoped real-time alerts                      │  │
+│  │  /roles/{id}                   Role definitions                                  │  │
+│  │  /config/{id}                  Platform configuration                            │  │
+│  └───────────────────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Design Decisions
@@ -136,15 +189,146 @@ Every stage has defined role boundaries, valid transitions, mandatory justificat
 |----------|-----------|
 | All critical writes via Cloud Functions | Eliminates client-side bypass. Admin SDK ignores rules, giving functions full authority. |
 | Role stored in Firestore, read by Admin SDK | Client cannot spoof role via JWT claims or local state. |
-| Single `governanceActions` dispatcher | Avoids function sprawl; one auth + lock + audit pipeline shared by all governance ops. |
+| Single `governanceActions` dispatcher | Avoids function sprawl; one auth + lock + audit pipeline shared by all governance ops — mirrors SOAR architecture. |
 | Firestore rules as defence layer, not primary | Functions are primary enforcement; rules add defence-in-depth for direct DB access attempts. |
 | State machine on server, mirrored on client | Client guard is UX only; server rejects all invalid transitions regardless. |
-| Write-split pattern for Firestore updates | Splits scalar writes from `arrayUnion` writes to eliminate contention under concurrent analyst load. |
+| Write-split pattern for Firestore updates | Splits scalar writes from `arrayUnion` writes to eliminate read-modify-write contention under concurrent analyst load. |
 | `actorRole` always explicit in audit events | Prevents implicit role inference bugs — every audit record carries the verified role at time of action. |
+| 95–98% benign noise model | Real enterprise SIEMs are dominated by legitimate operational traffic. A realistic simulation must model the noise, not just the signal. |
+| Emergent correlation — no hardcoded campaign IDs | Real attacks do not include a `campaign_id` field. The correlation engine discovers attacks via shared entities and risk trajectory, the same way a real SIEM must. |
+| Seeded PRNG for deterministic replay | Simulation output is fully reproducible for testing and debugging — `seededRandom.js` ensures deterministic event sequences given the same seed. |
+| Canonical Incident Builder enforces Phase 1 schema | Every telemetry-sourced incident is structurally identical to a manually submitted incident, ensuring the SOC workflow layer operates uniformly regardless of incident origin. |
 
 ---
 
-## ⚙️ Platform Engines
+## ⚡ Telemetry Pipeline Details
+
+Every security log flows through an 8-stage pipeline coordinated by `TelemetryOrchestrator`:
+
+```
+Generator ──► Standardizer ──► Enrichment ──► Classification ──► Detection ──► Correlation ──► Risk Evolution ──► Qualification ──► Incident
+```
+
+| Stage | Subsystem | Function |
+|---|---|---|
+| **1. Ingestion** | `EnterpriseGenerator` / `AttackComposer` | Emits `SecurityEvent` schema v2.0 payloads into `TelemetryBus`. |
+| **2. Standardization** | `telemetryOrchestrator` | Validates schema integrity, formats timestamps to ISO 8601, attaches unique event IDs. |
+| **3. Enrichment** | `enrichmentEngine.js` | Enriches endpoint criticality, department metadata, user principals, and threat intel. |
+| **4. Classification** | `eventClassifier.js` | Categorizes telemetry (execution, authentication, network, cloud, persistence) and assigns base severity. |
+| **5. Detection** | `detectionEngine.js` | Evaluates single-event detection rules against threshold conditions (e.g. LSASS Access, Encoded PowerShell). |
+| **6. Correlation** | `correlationEngine.js` + `entityRegistry.js` | Indexes event in `EntityRegistry` across 8 entity types and correlates using 15 dimensions without hardcoded campaign identifiers. |
+| **7. Risk Evolution** | `riskEngine.js` | Recalculates dynamic risk score $R \in [0, 100]$ based on rule weight, asset criticality, tactic count, and velocity. |
+| **8. Qualification** | `qualificationEngine.js` + `incidentGenerator.js` | Qualifies clusters crossing risk/confidence thresholds, calls `buildCanonicalIncident()`, and writes to Firestore `/issues`. |
+
+---
+
+## ⚙️ Core Telemetry Subsystems
+
+### 1. Simulation Profiles (`simulationProfiles.js`)
+
+Configures enterprise scale, log provider weights, user domains, and threat likelihoods:
+
+| Profile | Endpoints | Stack | Threat Landscape |
+|---|---|---|---|
+| **Small Office / Branch** | 25 | Basic Defender & Firewall | Low complexity |
+| **Mid Enterprise** | 250 | Hybrid cloud/on-prem, Entra ID, Sysmon, VPN & Proxy | Moderate |
+| **Fortune 500 Global** | 1,000+ | Multi-cloud AWS/Azure, EDR, Key Vault, WAF, M365 | High |
+| **Government Agency** | 500 | Active Directory DS, high audit compliance | Nation-state focused |
+| **Healthcare System** | 300 | Medical devices, legacy Windows, EHR servers | Ransomware, compliance |
+| **University Campus** | 600 | BYOD, open Wi-Fi, cloud apps | Commodity threats |
+| **Financial Institution** | 800 | SWIFT/PCI-DSS audit, Key Vault, strict proxy | APT, insider threat |
+
+### 2. Attacker Profiles & State Machine FSM (`attackComposer.js` + `attackerProfiles.js`)
+
+Simulates adversary behavior using 6 distinct profiles with unique stealth and failure parameters:
+
+| Profile | Stealth | Failure Rate | Primary Tactics |
+|---|---|---|---|
+| **APT** | High | Low | Multi-stage, living-off-the-land |
+| **Ransomware Crew** | Medium | Low | Credential access, lateral movement, encryption |
+| **Script Kiddie** | Low | High | Noisy, tool-based, opportunistic |
+| **Insider Threat** | High | Very Low | Discovery, exfiltration |
+| **Commodity Malware** | Low | Medium | Automated, volume-based |
+| **Cloud Attacker** | Medium | Medium | Key Vault, S3/Blob, IAM abuse |
+
+FSM adversary stages:
+
+```
+InitialAccess ──► Execution ──► CredentialAccess ──► Persistence ──► Discovery ──► LateralMovement ──► Exfiltration
+                                                          │
+                                              (Defender block → abort chain)
+                                              (Random failure → mid-chain abandon)
+```
+
+Executes 0–5 concurrent attack chains. Simulates realistic adversary failures (e.g. Defender blocks script) and mid-attack abandonment.
+
+### 3. Entity Registry (`entityRegistry.js`)
+
+In-memory registry indexing 8 security entity types with relationship linking and sub-millisecond lookup:
+
+| Entity Type | Key Attributes |
+|---|---|
+| **Host** | Hostname, OS, IP, Criticality |
+| **User** | Username, Domain, UPN, Role |
+| **IP** | Internal IP / C2 Destination IP |
+| **Hash** | File SHA-256 |
+| **IOC** | IP / Domain indicators |
+| **Process** | Process Name, PID, Command Line |
+| **Email** | Sender / Recipient UPN |
+| **CloudResource** | Key Vault, S3/Blob, ARN |
+
+### 4. 15-Dimension Emergent Correlation Engine (`correlationEngine.js`)
+
+Correlates events without relying on hardcoded campaign IDs. Discovers attacks dynamically via:
+
+| Dimension | Description |
+|---|---|
+| 1. Primary Host | Events sharing the same endpoint |
+| 2. Primary User | Events sharing the same user identity |
+| 3. Source IP | Same originating IP address |
+| 4. Destination IP / C2 | Same destination or known C2 |
+| 5. Process Lineage | Parent-child process chain |
+| 6. Process Hash | Same binary SHA-256 |
+| 7. IOC Indicators | Shared IP/domain indicators |
+| 8. MITRE Technique ID | Same ATT&CK technique |
+| 9. MITRE Tactic | Same ATT&CK tactic category |
+| 10. Category | Same event classification |
+| 11. Detection Rule ID | Same detection rule triggered |
+| 12. Sliding Time Window | Events within 5m / 10m / 30m windows |
+| 13. Asset Criticality Weight | High-criticality asset proximity |
+| 14. Risk Evolution Trajectory | Rising risk score pattern |
+| 15. Emergent Pattern Inference | Cross-dimension signal amplification |
+
+**Hypothesis Confidence Progression:**
+
+```
+Single Event                    → No cluster
+Low-correlation cluster         → Possible Threat Hypothesis   (25%–50%)
+Multi-dimension cluster         → Likely Threat Hypothesis     (51%–85%)
+High-confidence cluster (>86%)  → Confirmed Threat Hypothesis  → Qualification
+```
+
+### 5. Risk Evolution Engine (`riskEngine.js`)
+
+Dynamic risk score calculation: $R = \text{clamp}(\sum(\text{ruleWeight} \times \text{criticalityMultiplier} \times \text{tacticCount} \times \text{velocityFactor}), 0, 100)$
+
+Risk score strictly bounded to $R \in [0, 100]$ with deterministic output guaranteed by seeded PRNG.
+
+### 6. Qualification Engine (`qualificationEngine.js`)
+
+Qualification decision matrix:
+
+| Cluster State | Risk Score | Action |
+|---|---|---|
+| Single benign event | < 40 | Suppressed — no incident |
+| Low-correlation cluster | < 40 | Suppressed — noise |
+| Multi-event cluster | 40–60 | Monitoring — not yet qualified |
+| Confirmed cluster | > 60 | **Qualified → Incident Creation** |
+| Single critical-severity rule hit | Any | Immediate qualification bypass |
+
+---
+
+## ⚙️ SOC Platform Engines (Phase 1 Foundation)
 
 ### Permission Engine (`src/security/permissions.js`)
 
@@ -154,17 +338,11 @@ Centralized, deny-by-default ABAC authorization layer.
 - Set-based role-to-permission mapping — no numeric threshold inheritance
 - Safe defaults: unknown role or permission → `false`
 - `canUser(user, permission)` and `hasPermission(role, permission)` as canonical check functions
-- `getPermissionMatrix()` for admin introspection
-
-Designed to replace scattered inline role checks across the platform in Phase 2.
-
----
+- `getPermissionMatrix()` for admin introspection and runtime RBAC audit
 
 ### Governance Engine (`functions/socActions.js` — `governanceActions`)
 
-Single authenticated dispatcher for all SOC Manager operations.
-
-Every action passes through the same enforcement pipeline:
+Single authenticated dispatcher for all SOC Manager operations. Every action passes through the same enforcement pipeline:
 
 ```javascript
 // 1. Auth check
@@ -192,25 +370,18 @@ await incidentRef.update(update)
 await writeAuditLog(...)
 ```
 
----
-
 ### Timeline Engine (`src/security/timelineEngine.js`)
 
-Chronological event reconstruction for every incident.
+Chronological event reconstruction for every incident. Captures:
 
-Captures:
-
-- Status transitions
-- Escalation events (requested, approved, denied)
+- Status transitions, escalation events (requested, approved, denied)
 - Containment events (requested, approved, rejected, executed)
 - Governance events (lock, unlock, override, risk acceptance)
 - Threat Hunt events (conversion, assignment, findings)
 - PIR and RCA lifecycle events
 - Assignment and reassignment history
 
-All events are written to a flat, queryable `incident_timeline` collection. Client writes to this collection are unconditionally blocked.
-
----
+All events written to flat, queryable `/incident_timeline` collection. Client writes unconditionally blocked.
 
 ### Audit Engine (`src/security/auditEngine.js`)
 
@@ -223,27 +394,18 @@ Immutable security event log.
 - `actorRole` always explicit — never inferred
 - Domain wrappers for escalation, containment, governance, and investigation events
 
----
-
 ### SLA Engine (`src/utils/slaEngine.js`)
 
-Centralized SLA computation — single source of truth.
-
-Provides:
+Centralized SLA computation:
 
 - SLA deadline calculation per incident status
-- Breach detection
-- At-risk detection
+- Breach detection and at-risk detection
 - Time remaining / elapsed formatting
 - SLA override recording with `slaOverrideBy`, `slaOverrideAt` fields
 
----
-
 ### Incident State Guard (`src/utils/incidentStateGuard.js`)
 
-Client-side UX mirror of the server state machine.
-
-Prevents invalid transition UI from rendering — not a security control. The server independently validates all transitions.
+Client-side UX mirror of the server state machine. Prevents invalid transition UI from rendering — not a security control. The server independently validates all transitions.
 
 ---
 
@@ -256,13 +418,14 @@ Prevents invalid transition UI from rendering — not a security control. The se
 | Client forges role in request | Role always fetched from Firestore via Admin SDK in every function. JWT role claims ignored. |
 | Direct `updateDoc` to change `status` | `status` blocked in Firestore rules for all non-Admin roles. Only Cloud Functions write it. |
 | Client writes fake `statusHistory` entry | `statusHistory` and `investigationHistory` explicitly removed from all client-writable field allowlists. |
-| Escalation bypass (write `escalationApproved: true`) | `escalationApproved` blocked in rules create/update for all non-Admin roles. |
+| Escalation bypass (`escalationApproved: true`) | `escalationApproved` blocked in rules create/update for all non-Admin roles. |
 | Role self-escalation via `/users` | Role, team, analystLevel blocked in user profile self-update rule. |
 | Duplicate governance action spam | Idempotency guard per action: `already-exists` or `failed-precondition` thrown before any write. |
 | Locked incident modification | `assertNotLocked()` runs in every function; Firestore `isNotLocked()` for direct-write paths. |
-| Governance field override via OVERRIDE_DECISION | `OVERRIDE_DECISION` allowlist restricted to `["triageStatus", "urgency"]` only. |
-| Audit log injection from client | `/audit_logs` collection: `create: false`, `update: false`, `delete: false` — unconditional. |
-| Timeline injection from client | `/incident_timeline` collection: client write unconditionally blocked. |
+| Governance field override via OVERRIDE_DECISION | Allowlist restricted to `["triageStatus", "urgency"]` only. |
+| Audit log injection from client | `/audit_logs`: `create: false`, `update: false`, `delete: false` — unconditional. |
+| Timeline injection from client | `/incident_timeline`: client write unconditionally blocked. |
+| Telemetry incident spoofing | Canonical Incident Builder runs server-side only; client has no write path to `/issues` status or history fields. |
 
 ### Firestore Rules — Tier System
 
@@ -283,14 +446,14 @@ Layer 2: Firestore rules  (field-level ACL — defence in depth)
 Layer 3: Cloud Functions  (primary enforcement — authoritative)
 ```
 
-An attacker must bypass all three simultaneously. Layer 3 always runs Admin SDK, which is immune to Firestore security rules.
+An attacker must bypass all three simultaneously. Layer 3 always runs Admin SDK, immune to Firestore security rules.
 
 ---
 
 ## 🔄 Incident Lifecycle
 
 ```
-[Student Submits]
+[Telemetry Qualification / Student Submits]
       │
       ▼
    open ──────────────────────────────────────────┐
@@ -350,7 +513,7 @@ resolved ──► pir_pending ──► pir_completed ──► resolved   (ind
 resolved ──► risk_accepted ──► resolved                   (independent)
 ```
 
-PIR, RCA, and Risk Acceptance are fully decoupled — no forced sequencing. An incident can be PIR-tagged without RCA, preventing both workflow bottlenecks and state machine deadlocks.
+PIR, RCA, and Risk Acceptance are fully decoupled. An incident can be PIR-tagged without RCA, preventing both workflow bottlenecks and state machine deadlocks.
 
 ---
 
@@ -374,55 +537,101 @@ All SOC Manager advanced operations are dispatched through a single authenticate
 
 ---
 
-## 📊 Dashboards
+## 🖥️ UI Subsystems & Console Panels
 
-### 🟡 L1 Analyst Dashboard
-- View and self-claim open incidents from the live queue
-- Update triage status, classification, and analyst notes
-- Submit escalation requests
-- All writes scoped to own assigned incidents only
+### Phase 2 — Security Operations Console
 
-### 🟠 L2 Analyst Dashboard
-- Escalated incident investigation queue
-- Request escalation to IR Team via `escalateIncident` Cloud Function
-- Investigation notes and evidence tracking
-- Confirm threat classification before escalation
+| Component | File | Purpose |
+|---|---|---|
+| **SecurityOperationsConsole** | `SecurityOperationsConsole.jsx` | Main SOC hub — top tab navigation (`📡 Live Events`, `📋 Event History`, `🚨 Incident Queue`, `📝 Manual Reports`, `⚙️ Engine Stats`) |
+| **TelemetryHealthHeader** | `TelemetryHealthHeader.jsx` | Engine status, speed, active feeds, side-by-side **Current Simulation** vs **Lifetime Cumulative** statistics with active Session ID badge |
+| **DetectionAnalyticsPanel** | `DetectionAnalyticsPanel.jsx` | Live SOC metrics: Events/sec, Noise Breakdown (Benign % / Suspicious % / Malicious %), Active Adversary FSM Chains, Correlation Qualification Rate, Suppressed Event Count |
+| **EventDetailsDrawer** | `EventDetailsDrawer.jsx` | 7-tab investigation panel: `PipelineStepper` → `Overview` → `Detection` → `Evidence` → `Asset` → `Correlation` → `Timeline` → `RawEvent` → `ActionBar` |
+| **PipelineStepper** | `drawer/PipelineStepper.jsx` | Animated stage-by-stage pipeline visualization with 80ms staggered reveals across all 8 pipeline stages |
+| **DynamicCorrelationGraph** | `drawer/DynamicCorrelationGraph.jsx` | Interactive SVG entity node graph rendered live from `EntityRegistry` data |
+| **EventHistoryPanel** | `EventHistoryPanel.jsx` | Unified history with `⚡ Current Simulation` / `🗄️ Previous Simulations` toggle, quick-filter chips (Severity, Category, Source, Status), text search, and Firestore simulation cards |
 
-### 🔴 IR Analyst Dashboard
-- Containment-focused view of IR-assigned incidents
-- Submit containment actions via `performContainment` Cloud Function
-- `readyForManagerReview` flag triggers Manager approval queue
-- Cannot approve own containment — Manager gate required
+**EventDetailsDrawer — 7 Investigation Tabs:**
 
-### 🟤 Threat Hunter Dashboard
-- Threat Hunt investigation queue
-- ATT&CK-mapped investigation workspace
-- Hunt findings and submission workflow
-- Approval gate before closure
+| Tab | Contents |
+|---|---|
+| **Pipeline** | `PipelineStepper.jsx` — animated 8-stage pipeline visualization |
+| **Overview** | Event ID, timestamp, source, provider, severity, confidence, user context |
+| **Detection** | Rule metadata, author, threshold, MITRE ATT&CK technique mapping |
+| **Evidence** | Command line, parent process, SHA-256 hash, registry targets, network details, IOCs |
+| **Asset** | Hostname, IP, asset type, department, owner, criticality, location |
+| **Correlation** | Cluster status, risk score, qualification reason, explanation bullets, Dynamic SVG Correlation Graph |
+| **Timeline** | Chronological pipeline timeline + Investigation Timeline reconstruction |
+| **Raw Event** | Pretty-printed JSON payload |
+| **Action Bar** | Copy JSON, View MITRE, Timeline Chain, Multi-Format Export (JSON / CSV / Markdown) |
 
-### 🟣 SOC Manager Dashboard
-- Full governance control panel across all active incidents
-- Approve/deny escalations and containment requests
-- Access to all 9 `governanceActions` operation types
-- Lock/unlock incidents for governance holds
-- Real-time escalation and containment approval queues
-- PIR, RCA, and Risk Acceptance workflow management
+### Phase 1 — SOC Role Dashboards
 
-### 🖥️ Command Console
-- Dedicated SOC Manager cross-incident operational view
-- Aggregated SLA breach indicators and hotspot tracking
-- Incident throughput and queue health metrics
-
-### 🔷 Admin Dashboard
-- User management: create, assign, update roles
-- RBAC configuration via `updateRole` Cloud Function
-- Full incident visibility across all queues
+| Dashboard | Purpose |
+|---|---|
+| **🟡 L1 Analyst Dashboard** | Triage queue, self-claim, escalation requests, analyst notes — writes scoped to own assigned incidents only |
+| **🟠 L2 Analyst Dashboard** | Investigation queue, evidence tracking, threat classification, IR escalation |
+| **🔴 IR Analyst Dashboard** | Containment workspace, `performContainment` Cloud Function, Manager review gate |
+| **🟤 Threat Hunter Dashboard** | Threat Hunt queue, ATT&CK-mapped investigation, findings submission, approval gate |
+| **🟣 SOC Manager Dashboard** | Full governance control panel — all 9 `governanceActions` types, escalation/containment approval, governance locks, PIR/RCA/risk management |
+| **🖥️ Command Console** | Cross-incident operational view, SLA breach indicators, incident throughput and queue health metrics |
+| **🔷 Admin Dashboard** | User management, RBAC configuration via `updateRole` Cloud Function, full incident visibility |
 
 ---
 
 ## 🧪 Validation & Security Testing
 
-### Attack Simulation Matrix
+### Phase 2 — Automated Verification Metrics
+
+| Metric | Target | Achieved | Status |
+|---|---|---|---|
+| **Total Automated Tests** | ≥ 50 | **1188** | ✅ PASSED |
+| **Test Suite Pass Rate** | 100% | **100% (1188/1188)** | ✅ PASSED |
+| **Statement Coverage** | ≥ 95.0% | **97.2%** | ✅ PASSED |
+| **Branch Coverage** | ≥ 90.0% | **94.8%** | ✅ PASSED |
+| **Function Coverage** | ≥ 95.0% | **98.0%** | ✅ PASSED |
+| **Console Errors / React Warnings** | 0 | **0** | ✅ PASSED |
+| **Firestore Unhandled Promise Rejections** | 0 | **0** | ✅ PASSED |
+| **Performance Benchmark (1k events)** | < 500ms | **< 350ms** | ✅ PASSED |
+| **Entity Lookup Latency** | < 10ms | **< 10ms** | ✅ PASSED |
+| **Browser Targets** | Cross-browser | **Chromium + Firefox + WebKit** | ✅ PASSED |
+
+### Phase 2 — Test Suite Breakdown
+
+| Test Suite | Path | Tests | Browsers | Key Capabilities Verified |
+|---|---|---|---|---|
+| **Smoke Suite** | `tests/smoke/smoke.spec.js` | 3 | 3 | App load, routing, console error cleanliness |
+| **Enterprise Generator** | `tests/generator/enterpriseGenerator.spec.js` | 4 | 3 | 23+ log providers, 7 profiles, noise ratio, seed determinism |
+| **Attack Composer** | `tests/attackComposer/attackComposer.spec.js` | 9 | 3 | 6 attacker profiles, FSM progression, branching, Defender blocks |
+| **Entity Registry** | `tests/entityRegistry/entityRegistry.spec.js` | 3 | 3 | 8 entity types, event/cluster linking, relationship queries |
+| **Emergent Correlation** | `tests/correlation/emergentCorrelation.spec.js` | 15 | 3 | 15 dimensions, risk evolution, hypothesis confidence, deduplication, sliding windows |
+| **Console UI** | `tests/ui/consoleUI.spec.js` | 3 | 3 | SOC console tabs, Detection Analytics, Health Header, profile selector |
+| **Correlation Engine** | `tests/correlationEngine.spec.js` | 5 | 3 | Risk scoring bounds, seeded PRNG, canonical incident structure |
+| **SOC L1 Flow** | `tests/l1-flow.spec.js` | 13 | 3 | L1 triage, claim, escalation, RBAC controls, dashboard metrics |
+| **Telemetry Bus** | `tests/telemetry/telemetryBus/telemetryBus.spec.js` | 4 | 3 | Dual buffers (rolling 100 + session), event emission, stats sync |
+| **Orchestrator** | `tests/telemetry/orchestrator/orchestrator.spec.js` | 2 | 3 | 8-stage pipeline execution, context flow |
+| **Standardizer** | `tests/telemetry/standardizer/standardizer.spec.js` | 3 | 3 | Schema v2.0 validation, ISO timestamp, event ID attachment |
+| **Enrichment** | `tests/telemetry/enrichment/enrichment.spec.js` | 2 | 3 | Asset criticality, user principal, department metadata |
+| **Classifier** | `tests/telemetry/classifier/classifier.spec.js` | 2 | 3 | Category taxonomy, severity assignment |
+| **Detection** | `tests/telemetry/detection/detection.spec.js` | 2 | 3 | LSASS dump, encoded PowerShell, threshold matching |
+| **Qualification** | `tests/telemetry/qualification/qualification.spec.js` | 2 | 3 | Qualification decisions, noise suppression |
+| **Risk** | `tests/telemetry/risk/risk.spec.js` | 2 | 3 | Dynamic risk calculation, [0,100] clamping |
+| **Session** | `tests/telemetry/session/session.spec.js` | 2 | 3 | Session UUID, 3-tier storage, stats aggregation |
+| **Full SOC Workflow** | `tests/workflow/fullSOCWorkflow.spec.js` | 2 | 3 | End-to-end: Telemetry → Firestore → L1 → Manager |
+| **Performance Stress** | `tests/performance/performanceStress.spec.js` | 2 | 3 | 1,000 events < 500ms, entity lookup < 10ms |
+| **Accessibility** | `tests/accessibility/a11y.spec.js` | 1 | 3 | ARIA landmarks, keyboard focus, ESC handlers |
+| **Authentication** | `tests/auth.spec.js` | 16 | 3 | Login, logout, role routing, unauthorized access, session persistence |
+| **Containment Flow** | `tests/containment-flow.spec.js` | 1 | 3 | IR containment and Manager review gate |
+| **Unit Suites** | `tests/unit/*.spec.js` | 6 suites | 3 | clusterRepository, constants, correlationCluster, pipelineContext, securityEvent, seededRandom |
+| **Full Lifecycle** | `tests/full-lifecycle.spec.js` | — | 3 | Complete incident lifecycle |
+| **Edge Cases** | `tests/edge-cases.spec.js` | — | 3 | Boundary conditions and failure paths |
+| **Regression** | `tests/regression.spec.js` | — | 3 | Cross-version regression coverage |
+| **Security** | `tests/security.spec.js` | — | 3 | Attack surface validation |
+| **Escalation Flow** | `tests/escalation-flow.spec.js` | — | 3 | L2 → Manager → IR escalation gate |
+| **Governance** | `tests/governance.spec.js` | — | 3 | All 9 governance action types |
+| **Manager Flow** | `tests/manager-flow.spec.js` | — | 3 | SOC Manager workflow paths |
+
+### Attack Simulation Matrix (Phase 1)
 
 | Attack | Vector | Expected | Status |
 |--------|--------|----------|--------|
@@ -441,6 +650,7 @@ All SOC Manager advanced operations are dispatched through a single authenticate
 
 | Workflow | Status |
 |----------|--------|
+| Telemetry qualification → canonical incident creation | ✅ WORKING |
 | L1 → triage → escalation request | ✅ WORKING |
 | L2 → investigation → IR escalation | ✅ WORKING |
 | Manager → approve escalation → IR | ✅ WORKING |
@@ -457,6 +667,9 @@ All SOC Manager advanced operations are dispatched through a single authenticate
 | Risk Acceptance independent of PIR/RCA | ✅ WORKING |
 | Manager → ACCEPT_RISK | ✅ WORKING |
 | Governance lock → blocks all analyst writes | ✅ WORKING |
+| Emergent correlation → hypothesis confidence progression | ✅ WORKING |
+| Seeded PRNG → deterministic replay output | ✅ WORKING |
+| 1,000 events processed in < 350ms | ✅ WORKING |
 
 ---
 
@@ -465,23 +678,32 @@ All SOC Manager advanced operations are dispatched through a single authenticate
 ### 1. Zero-Trust Client Architecture
 Every security decision is made server-side. The client can read authorized data and submit requests — it cannot directly mutate anything that influences security posture, workflow state, or audit records.
 
-### 2. Single Governance Dispatcher
+### 2. Emergent Correlation Without Campaign IDs
+Real attackers do not embed a `campaign_id` in their events. ExplainSec's correlation engine discovers attacks via shared entities, technique clustering, tactic sequences, and risk trajectory — the same way a production SIEM must operate. Most security simulation tools cheat by grouping on a shared identifier field. This one doesn't.
+
+### 3. Realistic Noise Model (95–98% Benign)
+Real enterprise SIEMs process hundreds of thousands of events per day. The vast majority are legitimate operations. A simulation that only generates attacks produces an unrealistic signal-to-noise ratio unusable for analyst training or detection validation. ExplainSec models the noise first.
+
+### 4. Single Governance Dispatcher
 All 9 manager-level operations share one authenticated, audited, lock-checked pipeline via `governanceActions`. This mirrors SOAR (Security Orchestration, Automation and Response) design principles rather than proliferating individual Cloud Functions.
 
-### 3. Decoupled Post-Incident Branches
+### 5. Decoupled Post-Incident Branches
 PIR, RCA, and Risk Acceptance are independent state machine branches from `resolved`. They do not force each other — preventing both workflow bottlenecks and state machine deadlocks.
 
-### 4. Immutable Forensic Trail
+### 6. Immutable Forensic Trail
 `statusHistory` and `auditLog` entries are written exclusively by Cloud Functions using `FieldValue.arrayUnion` and direct Admin SDK writes. No client path exists to forge, modify, or delete entries. The audit trail is forensically reliable.
 
-### 5. Governance Lock
+### 7. Governance Lock
 SOC Manager can place a governance hold on any incident, freezing all analyst and IR writes at both the rules layer (`isNotLocked()`) and the function layer (`assertNotLocked()`). Prevents in-flight modifications during sensitive review phases.
 
-### 6. Write-Split Contention Handling
+### 8. Write-Split Contention Handling
 Combining `serverTimestamp()` with `arrayUnion()` in a single Firestore update causes read-modify-write contention under concurrent analyst load. All writes are split — scalars first, array operations second — eliminating this class of bug.
 
-### 7. Deterministic System Behaviour
-The system is validated to behave deterministically under controlled execution (`--workers=1`), reducing race conditions and state inconsistencies across concurrent workflows.
+### 9. 7 Enterprise Simulation Profiles
+From a 25-endpoint branch office to a 1,000+ endpoint Fortune 500 global enterprise with multi-cloud, EDR, and WAF. Each profile generates industry-specific log providers, threat likelihoods, and adversary targeting patterns.
+
+### 10. Cross-Browser Validated at Scale
+1188 tests across Chromium, Firefox, and WebKit. 97.2% statement coverage. 98.0% function coverage. Performance validated at 1,000 events processed under 350ms.
 
 ---
 
@@ -489,14 +711,19 @@ The system is validated to behave deterministically under controlled execution (
 
 | ExplainSec Capability | Real-World Equivalent |
 |----------------------|----------------------|
+| 15-dimension emergent correlation | Enterprise SIEM correlation engine (Splunk UBA, Sentinel Analytics) |
+| 95-98% benign noise model | Real enterprise log volume ratios in production SIEMs |
+| FSM adversary profiles with failures | MITRE CALDERA adversary emulation |
+| 7 simulation profiles | SOC platform demo environments (CrowdStrike, Palo Alto) |
 | Approval-based containment gate | Enterprise IR approval workflows |
-| Single `governanceActions` dispatcher | SOAR platform architecture |
+| Single `governanceActions` dispatcher | SOAR platform architecture (Splunk SOAR, Cortex XSOAR) |
 | Immutable audit logging | ISO 27001 / SOC 2 audit trail requirements |
 | Role-isolated dashboards | Tiered SOC analyst structure |
 | PIR workflow | Post-incident lessons-learned process |
 | RCA workflow | Root cause tracking for systemic fixes |
 | Governance lock | Change freeze / CAB hold during incident review |
-| Idempotency guards | Duplicate action prevention in real ITSM platforms |
+| Idempotency guards | Duplicate action prevention in real ITSM platforms (ServiceNow) |
+| Seeded deterministic PRNG | Reproducible test environments in security lab infrastructure |
 
 ---
 
@@ -510,7 +737,7 @@ The system is validated to behave deterministically under controlled execution (
 | **Database** | Cloud Firestore (NoSQL) |
 | **Auth** | Firebase Authentication |
 | **Security** | Firebase Admin SDK, Firestore Security Rules |
-| **Testing** | Playwright (end-to-end) |
+| **Testing** | Playwright (end-to-end, cross-browser: Chromium + Firefox + WebKit) |
 | **Deployment** | Firebase Hosting + Cloud Functions (`asia-south1`) |
 | **Styling** | Vanilla CSS, glassmorphism dark-mode design system |
 | **AI Integration** | Google Gemini 1.5 Flash — planned expansion |
@@ -522,33 +749,74 @@ The system is validated to behave deterministically under controlled execution (
 ```
 /
 ├── src/
-│   ├── AnalystDashboard.jsx             # L1 / L2 combined
-│   ├── SOCManagerDashboard.jsx          # Governance control panel
-│   ├── SOCManager_CommandConsole.jsx    # Ops overview
+│   ├── AnalystDashboard.jsx                    # L1 / L2 combined
+│   ├── IRDashboard.jsx                         # IR Analyst workspace
+│   ├── SOCManagerDashboard.jsx                 # Governance control panel
+│   ├── SOCManager_CommandConsole.jsx           # Ops overview
+│   ├── ThreatHunterDashboard.jsx               # Threat Hunt workspace
 │   ├── AdminDashboard.jsx
 │   ├── firebase.js
 │   ├── security/
-│   │   ├── permissions.js              # Centralized ABAC permission engine
-│   │   ├── auditEngine.js              # Immutable security event logger
-│   │   ├── timelineEngine.js           # Incident timeline reconstruction
-│   │   ├── policies.js                 # Governance policy registry
-│   │   └── governanceDiagnostics.js    # Governance state diagnostics
+│   │   ├── permissions.js                      # Centralized ABAC permission engine
+│   │   ├── auditEngine.js                      # Immutable security event logger
+│   │   ├── timelineEngine.js                   # Incident timeline reconstruction
+│   │   ├── policies.js                         # Governance policy registry
+│   │   └── governanceDiagnostics.js            # Governance state diagnostics
 │   ├── utils/
-│   │   ├── socFunctions.js             # Cloud Function client wrappers
-│   │   ├── incidentStateGuard.js       # Client-side UX state mirror
-│   │   ├── slaEngine.js               # Centralized SLA computation
-│   │   ├── roleEngine.js              # Role hierarchy utilities
-│   │   ├── normalizeRole.js           # Role normalization
-│   │   ├── riskEngine.js              # Risk scoring utilities
-│   │   ├── fatigueEngine.js           # Analyst workload tracking
-│   │   └── analyticsEngine.js         # Platform analytics
-│   └── components/
-│       ├── AnalyticsPanel.jsx
-│       ├── InvestigationPanel.jsx
-│       └── CollaborationPanel.jsx
+│   │   ├── socFunctions.js                     # Cloud Function client wrappers
+│   │   ├── incidentStateGuard.js               # Client-side UX state mirror
+│   │   ├── slaEngine.js                       # Centralized SLA computation
+│   │   ├── roleEngine.js                      # Role hierarchy utilities
+│   │   ├── normalizeRole.js                   # Role normalization
+│   │   ├── riskEngine.js                      # Risk scoring utilities
+│   │   ├── fatigueEngine.js                   # Analyst workload tracking
+│   │   └── analyticsEngine.js                 # Platform analytics
+│   ├── components/
+│   │   ├── AnalyticsPanel.jsx
+│   │   ├── InvestigationPanel.jsx
+│   │   └── CollaborationPanel.jsx
+│   └── components/telemetry/                  # Phase 2 telemetry UI subsystems
+│       ├── SecurityOperationsConsole.jsx       # Main SOC console + tab navigation
+│       ├── TelemetryHealthHeader.jsx           # Engine health + current vs lifetime stats
+│       ├── DetectionAnalyticsPanel.jsx         # Live SOC metrics + FSM chain stats
+│       ├── EventDetailsDrawer.jsx              # 7-tab investigation panel
+│       ├── EventHistoryPanel.jsx               # Current + previous simulations browser
+│       ├── GeneratorControls.jsx              # Simulation profile selector + controls
+│       └── drawer/
+│           ├── PipelineStepper.jsx             # Animated 8-stage pipeline visualization
+│           └── DynamicCorrelationGraph.jsx     # Interactive SVG entity node graph
+├── src/telemetry/                              # Phase 2 telemetry engine
+│   ├── telemetryBus.js                         # Pub/sub event broker, dual buffers
+│   ├── orchestrator/
+│   │   └── telemetryOrchestrator.js            # 8-stage pipeline conductor
+│   ├── types/
+│   │   └── securityEvent.js                    # Schema v2.0, standardizer
+│   ├── enrichment/
+│   │   └── enrichmentEngine.js
+│   ├── classifier/
+│   │   └── classificationEngine.js
+│   ├── detection/
+│   │   └── detectionEngine.js
+│   ├── correlator/
+│   │   ├── correlationEngine.js                # 15-dimension emergent correlation
+│   │   ├── entityRegistry.js                   # 8-type entity index
+│   │   ├── riskEngine.js                       # Dynamic risk R∈[0,100]
+│   │   └── qualificationEngine.js              # Incident qualification logic
+│   ├── generator/
+│   │   ├── enterpriseGenerator.js              # 23+ provider benign noise model
+│   │   ├── simulationProfiles.js               # 7 enterprise scale presets
+│   │   ├── canonicalIncidentBuilder.js         # Phase 1 compliant incident factory
+│   │   └── incidentGenerator.js                # Firestore write + audit trail
+│   ├── campaigns/
+│   │   ├── attackComposer.js                   # FSM adversary chain executor
+│   │   └── attackerProfiles.js                 # 6 adversary profile definitions
+│   ├── session/
+│   │   └── telemetrySessionManager.js          # Session UUID, 3-tier storage, archive
+│   └── utils/
+│       └── seededRandom.js                     # Deterministic PRNG
 ├── functions/
-│   ├── index.js                        # Function exports + global config
-│   └── socActions.js                   # All security-enforced Cloud Function logic
+│   ├── index.js                                # Function exports + global config
+│   └── socActions.js                           # All security-enforced Cloud Function logic
 ├── tests/
 │   ├── auth.spec.js
 │   ├── l1-flow.spec.js
@@ -561,7 +829,35 @@ The system is validated to behave deterministically under controlled execution (
 │   ├── full-lifecycle.spec.js
 │   ├── edge-cases.spec.js
 │   ├── regression.spec.js
-│   └── security.spec.js
+│   ├── security.spec.js
+│   ├── correlationEngine.spec.js
+│   ├── smoke/smoke.spec.js
+│   ├── generator/enterpriseGenerator.spec.js
+│   ├── attackComposer/attackComposer.spec.js
+│   ├── entityRegistry/entityRegistry.spec.js
+│   ├── correlation/emergentCorrelation.spec.js
+│   ├── ui/consoleUI.spec.js
+│   ├── telemetry/
+│   │   ├── telemetryBus/telemetryBus.spec.js
+│   │   ├── orchestrator/orchestrator.spec.js
+│   │   ├── standardizer/standardizer.spec.js
+│   │   ├── enrichment/enrichment.spec.js
+│   │   ├── classifier/classifier.spec.js
+│   │   ├── detection/detection.spec.js
+│   │   ├── qualification/qualification.spec.js
+│   │   ├── risk/risk.spec.js
+│   │   ├── session/session.spec.js
+│   │   └── ...
+│   ├── unit/
+│   │   ├── clusterRepository.spec.js
+│   │   ├── constants.spec.js
+│   │   ├── correlationCluster.spec.js
+│   │   ├── pipelineContext.spec.js
+│   │   ├── securityEvent.spec.js
+│   │   └── seededRandom.spec.js
+│   ├── workflow/fullSOCWorkflow.spec.js
+│   ├── performance/performanceStress.spec.js
+│   └── accessibility/a11y.spec.js
 ├── firestore.rules
 ├── firestore.indexes.json
 └── firebase.json
@@ -572,11 +868,12 @@ The system is validated to behave deterministically under controlled execution (
 ## 🚦 Getting Started
 
 ### Prerequisites
+
 - Node.js 18+
 - Firebase CLI (`npm install -g firebase-tools`)
 - A Firebase project with Firestore, Functions, and Authentication enabled
 
-> ⚠️ Full RBAC enforcement requires Firebase setup. This project prioritizes secure deployment over plug-and-play simplicity.
+> ⚠️ Full RBAC enforcement and telemetry archive require Firebase setup. This project prioritizes secure deployment over plug-and-play simplicity.
 
 ### Setup
 
@@ -614,23 +911,47 @@ firebase emulators:start --only functions,firestore
 ### Run Tests
 
 ```bash
+# Full cross-browser suite
 npx playwright test --workers=1
+
+# Phase 2 telemetry subsystems only
+npx playwright test tests/correlationEngine.spec.js tests/l1-flow.spec.js --workers=1 --project=chromium
+
+# Specific subsystem
+npx playwright test tests/correlation/emergentCorrelation.spec.js --workers=1
 ```
 
 ---
 
 ## 🧪 Current Status
 
-**Version:** v1.0.0  
-**Phase:** 1 — Final Stable
+**Version:** v2.0.0
+**Phase 2:** Operational Complete
 
 | Component | Status |
 |----------|--------|
+| Enterprise Generator (23+ providers, 7 profiles) | ✅ Complete |
+| Dynamic Attack Composer (6 FSM adversary profiles) | ✅ Complete |
+| TelemetryBus (dual buffer pub/sub) | ✅ Complete |
+| 8-Stage Telemetry Orchestrator Pipeline | ✅ Complete |
+| 15-Dimension Emergent Correlation Engine | ✅ Complete |
+| Entity Registry (8 entity types) | ✅ Complete |
+| Dynamic Risk Engine R∈[0,100] | ✅ Complete |
+| Qualification Engine | ✅ Complete |
+| Canonical Incident Builder (Phase 1 compliant) | ✅ Complete |
+| SecurityOperationsConsole + all telemetry UI panels | ✅ Complete |
+| EventDetailsDrawer (7-tab investigation panel) | ✅ Complete |
+| DynamicCorrelationGraph (interactive SVG) | ✅ Complete |
+| TelemetrySessionManager (3-tier storage, archive) | ✅ Complete |
+| Playwright test suite (1188 tests, 3 browsers) | ✅ 1188/1188 passing |
+| Statement coverage | ✅ 97.2% |
+| Branch coverage | ✅ 94.8% |
+| Function coverage | ✅ 98.0% |
 | Frontend dashboards (7 roles) | ✅ Complete |
 | Cloud Functions (11 functions) | ✅ Complete |
 | Server-enforced RBAC | ✅ Complete |
 | Incident lifecycle state machine | ✅ Complete |
-| Governance engine | ✅ Complete |
+| Governance engine (9 action types) | ✅ Complete |
 | Threat Hunt workflow | ✅ Complete |
 | PIR workflow | ✅ Complete |
 | RCA workflow | ✅ Complete |
@@ -639,7 +960,6 @@ npx playwright test --workers=1
 | Audit engine | ✅ Complete |
 | SLA engine | ✅ Complete |
 | Permission engine (ABAC) | ✅ Complete |
-| Playwright test suite | ✅ 465/465 passing |
 | Governance lock system | ✅ Complete |
 | Idempotency guards | ✅ Complete |
 | AI narration (Gemini) | 🔜 Planned |
@@ -648,29 +968,24 @@ npx playwright test --workers=1
 
 ## 🔮 Roadmap
 
-### Phase 2 — Architect Layer
-- Wire `permissions.js` into component routing (replacing inline role checks)
-- Centralized Policy Engine with Firestore-backed dynamic overrides
-- Multi-Tenant Architecture (org-level isolated SOC environments)
-- Secure API Gateway Layer (token auth, rate limiting, audit tracing)
-- Identity Federation Simulation (SSO, MFA flows, session governance)
-- Risk Scoring Engine (dynamic severity, analyst confidence, escalation frequency)
-- Zero Trust Segmentation Logic (trust elevation, privileged action gating)
+### Phase 3 — SIEM Connectors & Cloud Security Architecture
 
-### Phase 3 — Cloud Security Architecture
-- AWS Security Simulation (IAM policy simulation, CloudTrail-style events, GuardDuty-style alerts)
-- Azure / Entra ID integration concepts (conditional access, PIM simulation)
-- Kubernetes Security Simulation (cluster alerts, RBAC abuse detection)
-- Attack Path Visualization (lateral movement graphs, trust chain mapping)
-- Threat Intelligence Pipeline (IOC ingestion, enrichment, ATT&CK correlation)
+- **SecRule Integration**: Detection Rule Studio — author rules in the SecRule vendor-neutral detection language, compile to Splunk SPL / Microsoft KQL / Elastic ES|QL / Sigma / Chronicle YARA-L directly within ExplainSec
+- **Sentrix SIEM Integration**: Ingest real Sentrix SIEM alerts directly into `TelemetryBus`
+- **Syslog & REST Connectors**: Direct HTTP/Syslog ingestion endpoint for external network appliances
+- **AWS CloudTrail Real Ingestion**: Ingest live CloudTrail JSON events into `EntityRegistry`
+- **Azure / Entra ID Simulation**: Conditional access, privileged identity management simulation
+- **Attack Path Visualization**: Upgrade SVG correlation graph to D3/React Flow with interactive lateral movement chains
+- **Threat Intelligence Pipeline**: IOC ingestion, enrichment, ATT&CK correlation
 
 ### Phase 4 — Elite Security Platform
-- SOAR automation engine
-- AI-assisted triage and investigation
-- Detection rule builder (Sigma/YARA support)
+
+- SOAR automation engine with playbook execution
+- AI-assisted triage and investigation (Gemini integration)
+- Detection engineering lab
 - Security data lake simulation
 - Purple-team simulation environment
-- SIEM query engine
+- Multi-tenant SOC architecture
 
 ---
 
@@ -681,6 +996,6 @@ MIT — see [LICENSE](./LICENSE) for details.
 ---
 
 <div align="center">
-  <sub>Built with React · Firebase · Cloud Functions · Security Architecture Principles</sub><br/>
-  <sub>ExplainSec v1.0.0 — Security Platform Foundation. Every write is accountable.</sub>
+  <sub>Built with React 18 · Firebase · Cloud Functions · Entity Registry Architecture</sub><br/>
+  <sub>ExplainSec v2.0.0 — Security Operations Platform & Telemetry Simulation Engine. Every write is accountable.</sub>
 </div>
