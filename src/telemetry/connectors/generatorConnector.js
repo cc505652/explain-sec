@@ -23,7 +23,7 @@ export class GeneratorConnector {
     this.speedMultiplier = 1; // 1 | 2 | 5 | 10
     this.currentSeed = null;
     this.timerId = null;
-    this.pauseOnIncident = true;
+    this.pauseOnIncident = false;
   }
 
   get campaignEngine() {

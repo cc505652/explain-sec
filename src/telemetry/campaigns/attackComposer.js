@@ -98,11 +98,11 @@ export class AttackComposer {
 
     // Determine state template mapping
     const templateIdMap = {
-      InitialAccess: "T1566.001",
+      InitialAccess: "CRED_PASS_SPRAY_01",
       Execution: "T1059.001",
       CredentialAccess: "T1003.001",
       Persistence: "T1547.001",
-      Discovery: "T1082",
+      Discovery: "T1046",
       LateralMovement: "T1021.002",
       Exfiltration: "T1041"
     };

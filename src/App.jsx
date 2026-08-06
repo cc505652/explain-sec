@@ -64,7 +64,7 @@ function AuthProvider({ children }) {
         role: role ?? null,
         isAuthLoading: false,
       });
-      
+
       // Allow React state to flush - critical for Firefox during rapid role switching
       if (typeof queueMicrotask === 'function') {
         queueMicrotask(() => {
@@ -224,7 +224,7 @@ function AppContent() {
           />
         </Routes>
 
-        {["student", "soc_l1", "soc_l2", "ir", "threat_hunter"].includes(normalizeRole(role)) && location.pathname === "/" && (
+        {["student"].includes(normalizeRole(role)) && location.pathname === "/" && (
           <SecurityOperationsConsole userRole={role} currentUser={user} />
         )}
 

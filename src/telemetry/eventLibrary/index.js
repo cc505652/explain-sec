@@ -40,7 +40,8 @@ export const ALL_EVENT_TEMPLATES = [
  * Returns a template by ID or category.
  */
 export function getTemplateById(id) {
-  return ALL_EVENT_TEMPLATES.find(t => t.templateId === id) || null;
+  if (!id) return null;
+  return ALL_EVENT_TEMPLATES.find(t => t.templateId === id || t.mitreTechnique?.id === id) || null;
 }
 
 export function getTemplatesByTactic(tactic) {

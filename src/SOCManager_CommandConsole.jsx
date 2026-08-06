@@ -172,19 +172,19 @@ function getAnalystDisplayLabel(assignedTo, usersData) {
   // If no assignment, return unassigned
   if (!assignedTo) return "Unassigned";
   if (assignedTo === "system") return "Auto-Routed";
-  
+
   // Check if we have user data for this UID
   if (usersData && usersData[assignedTo]) {
     const userData = usersData[assignedTo];
-    
+
     // Build display name based on user data
     let displayName = userData.displayName || userData.email || "Unknown User";
-    
+
     // Add role/level information
     if (userData.analystLevel) {
       const levelLabels = {
         "L1": "SOC L1 Analyst",
-        "L2": "SOC L2 Analyst", 
+        "L2": "SOC L2 Analyst",
         "IR": "Incident Response",
         "TH": "Threat Hunter"
       };
@@ -197,19 +197,19 @@ function getAnalystDisplayLabel(assignedTo, usersData) {
       };
       displayName += ` (${roleLabels[userData.role] || userData.role})`;
     }
-    
+
     return displayName;
   }
-  
+
   // Fallback to staff options if no user data
   const found = STAFF_OPTIONS.find((x) => x.value === assignedTo);
   if (found) return found.label;
-  
+
   // Last resort: show the UID if it's a recognizable format
   if (assignedTo.includes("@")) {
     return assignedTo.split("@")[0]; // Show email prefix
   }
-  
+
   return assignedTo; // Return as-is if nothing else matches
 }
 
@@ -218,20 +218,20 @@ function generateUserOptions(usersData, currentUserRole) {
   if (!usersData || Object.keys(usersData).length === 0) {
     return STAFF_OPTIONS; // Fallback to old options if no user data
   }
-  
+
   const userOptions = [];
-  
+
   Object.entries(usersData).forEach(([uid, userData]) => {
     // Only show users that can be assigned (not admins unless current user is admin)
     if (normalizeRole(userData.role) === 'admin' && normalizeRole(currentUserRole) !== 'admin') return;
-    
+
     let displayName = userData.displayName || userData.email || "Unknown User";
-    
+
     // Add analyst level information
     if (userData.analystLevel) {
       const levelLabels = {
         "L1": "SOC L1 Analyst",
-        "L2": "SOC L2 Analyst", 
+        "L2": "SOC L2 Analyst",
         "IR": "Incident Response",
         "TH": "Threat Hunter"
       };
@@ -244,23 +244,23 @@ function generateUserOptions(usersData, currentUserRole) {
       };
       displayName += ` (${roleLabels[userData.role] || userData.role})`;
     }
-    
+
     userOptions.push({
       value: uid, // Use actual user UID
       label: displayName,
       level: userData.analystLevel || userData.role || 'unknown'
     });
   });
-  
+
   // Sort by level priority: L2 > L1 > IR > TH > Student > Admin
   const levelPriority = { 'L2': 1, 'L1': 2, 'IR': 3, 'TH': 4, 'analyst': 5, 'student': 6, 'admin': 7 };
-  
+
   userOptions.sort((a, b) => {
     const priorityA = levelPriority[a.level] || 999;
     const priorityB = levelPriority[b.level] || 999;
     return priorityA - priorityB;
   });
-  
+
   return userOptions;
 }
 
@@ -275,7 +275,7 @@ function hasPermission(userRole, permission) {
 function calculateBreachRiskScore(issue, analystActiveTickets, categoryAvgResolveTime) {
   const urgencyWeight = URGENCY_WEIGHTS[issue.urgency] || 1;
   const riskScore = (analystActiveTickets * 0.4) + (categoryAvgResolveTime * 0.3) + (urgencyWeight * 0.3);
-  
+
   return {
     score: Math.round(riskScore * 100) / 100,
     riskLevel: riskScore > RISK_THRESHOLD ? 'high' : riskScore > 1.5 ? 'medium' : 'low'
@@ -285,10 +285,10 @@ function calculateBreachRiskScore(issue, analystActiveTickets, categoryAvgResolv
 // Incident Stuck Detection
 function isStuckIncident(issue) {
   if (issue.status !== 'in_progress') return false;
-  
+
   const updatedAtMs = tsToMillis(issue.updatedAt);
   const hoursSinceUpdate = (Date.now() - updatedAtMs) / (60 * 60 * 1000);
-  
+
   return hoursSinceUpdate > STUCK_THRESHOLD_HOURS;
 }
 
@@ -296,30 +296,30 @@ function isStuckIncident(issue) {
 function findIncidentClusters(issues) {
   const clusters = [];
   const processed = new Set();
-  
+
   issues.forEach(issue => {
     if (processed.has(issue.id)) return;
-    
+
     const issueTime = tsToMillis(issue.createdAt);
     const cluster = issues.filter(other => {
       if (other.id === issue.id || processed.has(other.id)) return false;
-      
+
       const otherTime = tsToMillis(other.createdAt);
       const timeDiff = Math.abs(issueTime - otherTime);
-      
-      return issue.category === other.category && 
-             issue.location === other.location && 
-             timeDiff <= CLUSTER_WINDOW_MS;
+
+      return issue.category === other.category &&
+        issue.location === other.location &&
+        timeDiff <= CLUSTER_WINDOW_MS;
     });
-    
+
     if (cluster.length > 0) {
       const clusterId = `cluster_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const allClusterIssues = [issue, ...cluster];
-      
+
       allClusterIssues.forEach(clusterIssue => {
         processed.add(clusterIssue.id);
       });
-      
+
       clusters.push({
         id: clusterId,
         issues: allClusterIssues,
@@ -330,7 +330,7 @@ function findIncidentClusters(issues) {
       });
     }
   });
-  
+
   return clusters;
 }
 
@@ -339,19 +339,19 @@ function calculateMTTAMTTR(issues) {
   const analystStats = {};
   const categoryStats = {};
   const urgencyStats = {};
-  
+
   issues.forEach(issue => {
     if (issue.status !== 'resolved' || !issue.assignedTo) return;
-    
+
     const createdAtMs = tsToMillis(issue.createdAt);
     const assignedAtMs = tsToMillis(issue.assignedAt);
     const resolvedAtMs = tsToMillis(issue.resolvedAt);
-    
+
     if (!assignedAtMs || !resolvedAtMs) return;
-    
+
     const mtaa = assignedAtMs - createdAtMs;
     const mttr = resolvedAtMs - createdAtMs;
-    
+
     // Analyst stats
     if (!analystStats[issue.assignedTo]) {
       analystStats[issue.assignedTo] = { mtaa: [], mttr: [], count: 0 };
@@ -359,7 +359,7 @@ function calculateMTTAMTTR(issues) {
     analystStats[issue.assignedTo].mtaa.push(mtaa);
     analystStats[issue.assignedTo].mttr.push(mttr);
     analystStats[issue.assignedTo].count++;
-    
+
     // Category stats
     if (!categoryStats[issue.category]) {
       categoryStats[issue.category] = { mtaa: [], mttr: [], count: 0 };
@@ -367,7 +367,7 @@ function calculateMTTAMTTR(issues) {
     categoryStats[issue.category].mtaa.push(mtaa);
     categoryStats[issue.category].mttr.push(mttr);
     categoryStats[issue.category].count++;
-    
+
     // Urgency stats
     if (!urgencyStats[issue.urgency]) {
       urgencyStats[issue.urgency] = { mtaa: [], mttr: [], count: 0 };
@@ -376,19 +376,19 @@ function calculateMTTAMTTR(issues) {
     urgencyStats[issue.urgency].mttr.push(mttr);
     urgencyStats[issue.urgency].count++;
   });
-  
+
   // Calculate averages
   const calculateAvg = (arr) => {
     if (arr.length === 0) return 0;
     return arr.reduce((a, b) => a + b, 0) / arr.length;
   };
-  
+
   const formatMs = (ms) => {
     const hours = Math.floor(ms / (60 * 60 * 1000));
     const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
     return `${hours}h ${minutes}m`;
   };
-  
+
   return {
     analyst: Object.fromEntries(
       Object.entries(analystStats).map(([key, stats]) => [
@@ -560,11 +560,11 @@ export default function SOCManager_CommandConsole() {
   // Fetch user roles and permissions
   useEffect(() => {
     if (!currentUser) return;
-    
+
     const fetchUserRole = async () => {
       try {
         const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-        
+
         // PHASE 1 FIX: Profile creation removed — only App.jsx creates profiles.
         // If profile doesn't exist, log warning and use read-only fallback.
         if (!userDoc.exists()) {
@@ -579,7 +579,7 @@ export default function SOCManager_CommandConsole() {
         console.error("Error fetching user role:", error);
       }
     };
-    
+
     fetchUserRole();
   }, [currentUser]);
 
@@ -606,29 +606,29 @@ export default function SOCManager_CommandConsole() {
   /* ---------- STATUS UPDATE (PHASE 1 FIX: via Cloud Function) ---------- */
   const updateStatus = async (issue, nextStatus) => {
     console.log("🔐 updateStatus called:", { nextStatus, userRole, issueId: issue.id });
-    
+
     if (issue.locked === true) {
       alert("Incident locked by SOC Manager");
       return;
     }
-    
+
     // RBAC Check (UX-only — server validates too)
     if (nextStatus === "in_progress" && !hasPermission(userRole, 'start_incident')) {
       alert("You don't have permission to start incidents.");
       return;
     }
-    
+
     if (nextStatus === "resolved" && !hasPermission(userRole, 'resolve_incident')) {
       alert("You don't have permission to resolve incidents.");
       return;
     }
-    
+
     try {
       const user = auth.currentUser;
-      const auditNote = nextStatus === "in_progress" ? `Investigation started by ${user?.email}` : 
-                       nextStatus === "resolved" ? `Resolved by ${user?.email}` : 
-                       `Status updated to ${nextStatus} by ${user?.email}`;
-      
+      const auditNote = nextStatus === "in_progress" ? `Investigation started by ${user?.email}` :
+        nextStatus === "resolved" ? `Resolved by ${user?.email}` :
+          `Status updated to ${nextStatus} by ${user?.email}`;
+
       const result = await callUpdateIncidentStatus(issue.id, nextStatus, auditNote);
       console.log("✅ Status updated via Cloud Function:", result);
     } catch (err) {
@@ -640,16 +640,16 @@ export default function SOCManager_CommandConsole() {
   /* ---------- AUTO-ASSIGNMENT ENGINE ---------- */
   const autoAssignIssue = async (issue) => {
     if (!autoAssignmentEnabled || issue.status !== "open" || issue.assignedTo) return;
-    
+
     try {
       // Find analysts with matching skills
       const availableAnalysts = Object.entries(users).filter(([uid, userData]) => {
         return normalizeRole(userData.role) === "soc_l1" &&
-               userData.skills?.includes(issue.category);
+          userData.skills?.includes(issue.category);
       });
-      
+
       if (availableAnalysts.length === 0) return;
-      
+
       // Calculate active tickets for each analyst
       const analystWorkloads = await Promise.all(
         availableAnalysts.map(async ([uid, userData]) => {
@@ -658,10 +658,10 @@ export default function SOCManager_CommandConsole() {
             where("assignedTo", "==", uid),
             where("status", "in", ["assigned", "in_progress"])
           );
-          
+
           const snapshot = await getDocs(activeTicketsQuery);
           const activeTickets = snapshot.size;
-          
+
           return {
             uid,
             userData,
@@ -670,7 +670,7 @@ export default function SOCManager_CommandConsole() {
           };
         })
       );
-      
+
       // Sort by lowest active tickets, then by avg resolve time
       analystWorkloads.sort((a, b) => {
         if (a.activeTickets !== b.activeTickets) {
@@ -678,7 +678,7 @@ export default function SOCManager_CommandConsole() {
         }
         return a.avgResolveTime - b.avgResolveTime;
       });
-      
+
       const bestAnalyst = analystWorkloads[0];
       if (bestAnalyst) {
         await assignIssue(issue, bestAnalyst.uid);
@@ -694,13 +694,13 @@ export default function SOCManager_CommandConsole() {
       alert("Incident locked by SOC Manager");
       return;
     }
-    
+
     // RBAC Check (UX-only — server validates too)
     if (!hasPermission(userRole, 'assign_incident')) {
       alert("You don't have permission to assign incidents.");
       return;
     }
-    
+
     try {
       const reason = `Assigned to ${assignedToValue} via Command Console`;
       const result = await callGovernanceAction(issue.id, "TRANSFER_OWNERSHIP", {
@@ -721,13 +721,13 @@ export default function SOCManager_CommandConsole() {
       alert("Incident locked by SOC Manager");
       return;
     }
-    
+
     // RBAC Check (UX-only — server validates too)
     if (!hasPermission(userRole, 'escalate_incident')) {
       alert("You don't have permission to escalate incidents.");
       return;
     }
-    
+
     const ok = window.confirm(`Escalate issue to SOC Manager?\n\n"${issue.title}"`);
     if (!ok) return;
 
@@ -747,29 +747,29 @@ export default function SOCManager_CommandConsole() {
       alert("Incident locked by SOC Manager");
       return;
     }
-    
+
     // Governance lock check
-    const incidentDoc = await getDoc(doc(db,"issues",issue.id));
+    const incidentDoc = await getDoc(doc(db, "issues", issue.id));
     const data = incidentDoc.data();
-    
-    if(data.locked === true){
+
+    if (data.locked === true) {
       alert("This incident is Governance Locked by SOC Manager");
       return;
     }
-    
+
     // 🔹 STEP 1 — Add Debug Log
     console.log("🧪 Admin Role Debug:", userRole);
-    
+
     // 🔹 STEP 2 — Replace With Safe Admin Check
     const isAdmin =
       normalizeRole(userRole) === "admin" ||
       normalizeRole(userRole?.role) === "admin";
-    
+
     if (!isAdmin) {
       alert("You don't have permission to archive incidents.");
       return;
     }
-    
+
     const ok = window.confirm(`Delete resolved issue?\n\n"${issue.title}"`);
     if (!ok) return;
 
@@ -784,7 +784,7 @@ export default function SOCManager_CommandConsole() {
 
       const user = auth.currentUser;
       const ref = doc(db, "issues", issue.id);
-      
+
       console.log("Firestore Path:", ref.path);
       console.log("Firestore Database:", db._databaseId.projectId);
 
@@ -817,7 +817,7 @@ export default function SOCManager_CommandConsole() {
       console.error("Error Code:", err.code);
       console.error("Error Message:", err.message);
       console.error("Full Error Object:", err);
-      
+
       alert("Archive Failed: " + err.message);
     }
   };
@@ -825,9 +825,9 @@ export default function SOCManager_CommandConsole() {
   /* ---------- ANALYST WORKLOAD INDICATOR ---------- */
   const analystWorkload = useMemo(() => {
     if (!currentUser) return 0;
-    return visibleIssues.filter(i => 
-      !i.isDeleted && 
-      i.assignedTo === currentUser.uid && 
+    return visibleIssues.filter(i =>
+      !i.isDeleted &&
+      i.assignedTo === currentUser.uid &&
       i.status !== "resolved"
     ).length;
   }, [visibleIssues, currentUser]);
@@ -837,22 +837,22 @@ export default function SOCManager_CommandConsole() {
     return visibleIssues.map(issue => {
       // Add MITRE ATT&CK mapping
       const mitreInfo = MITRE_MAPPING[issue.category] || { tactic: '', technique: '', name: '' };
-      
+
       // Calculate SLA breach prediction
-      const analystActiveTickets = visibleIssues.filter(i => 
-        i.assignedTo === issue.assignedTo && 
-        i.status !== 'resolved' && 
+      const analystActiveTickets = visibleIssues.filter(i =>
+        i.assignedTo === issue.assignedTo &&
+        i.status !== 'resolved' &&
         !i.isDeleted
       ).length;
-      
+
       const categoryAvgTime = mttaMttrStats.category[issue.category]?.avgMTTR || '24h';
       const avgHours = parseInt(categoryAvgTime) || 24;
-      
+
       const riskScore = calculateBreachRiskScore(issue, analystActiveTickets, avgHours);
-      
+
       // Check if stuck
       const stuck = isStuckIncident(issue);
-      
+
       return {
         ...issue,
         ...mitreInfo,
@@ -866,11 +866,11 @@ export default function SOCManager_CommandConsole() {
   // Auto-assignment effect
   useEffect(() => {
     if (!autoAssignmentEnabled) return;
-    
-    const openUnassignedIssues = visibleIssues.filter(issue => 
+
+    const openUnassignedIssues = visibleIssues.filter(issue =>
       issue.status === 'open' && !issue.assignedTo && !issue.isDeleted
     );
-    
+
     openUnassignedIssues.forEach(issue => {
       autoAssignIssue(issue);
     });
@@ -879,32 +879,32 @@ export default function SOCManager_CommandConsole() {
   // Analyst Fatigue Index
   const analystFatigueIndex = useMemo(() => {
     const fatigueData = {};
-    
+
     Object.entries(users).forEach(([uid, userData]) => {
       if (userData.role !== 'analyst') return;
-      
-      const activeIncidents = visibleIssues.filter(i => 
-        i.assignedTo === uid && 
-        i.status !== 'resolved' && 
+
+      const activeIncidents = visibleIssues.filter(i =>
+        i.assignedTo === uid &&
+        i.status !== 'resolved' &&
         !i.isDeleted
       ).length;
-      
-      const highUrgencyIncidents = visibleIssues.filter(i => 
-        i.assignedTo === uid && 
-        i.urgency === 'high' && 
-        i.status !== 'resolved' && 
+
+      const highUrgencyIncidents = visibleIssues.filter(i =>
+        i.assignedTo === uid &&
+        i.urgency === 'high' &&
+        i.status !== 'resolved' &&
         !i.isDeleted
       ).length;
-      
-      const stuckIncidents = visibleIssues.filter(i => 
-        i.assignedTo === uid && 
-        isStuckIncident(i) && 
+
+      const stuckIncidents = visibleIssues.filter(i =>
+        i.assignedTo === uid &&
+        isStuckIncident(i) &&
         !i.isDeleted
       ).length;
-      
+
       // Calculate fatigue score (0-100)
       const fatigueScore = Math.min(100, (activeIncidents * 10) + (highUrgencyIncidents * 20) + (stuckIncidents * 30));
-      
+
       fatigueData[uid] = {
         name: userData.email || uid,
         activeIncidents,
@@ -914,7 +914,7 @@ export default function SOCManager_CommandConsole() {
         fatigueLevel: fatigueScore > 80 ? 'critical' : fatigueScore > 50 ? 'high' : fatigueScore > 20 ? 'medium' : 'low'
       };
     });
-    
+
     return fatigueData;
   }, [visibleIssues, users]);
 
@@ -925,7 +925,7 @@ export default function SOCManager_CommandConsole() {
 
   // High risk incidents
   const highRiskIncidents = useMemo(() => {
-    return enhancedIssues.filter(issue => 
+    return enhancedIssues.filter(issue =>
       issue.breachRiskLevel === 'high' && !issue.isDeleted
     );
   }, [enhancedIssues]);
@@ -1104,13 +1104,13 @@ ${stats.hotspots.length ? stats.hotspots.map((h, idx) => `${idx + 1}) ${h.locati
 
 📌 Category Breakdown:
 ${Object.entries(stats.byCategory).length
-  ? Object.entries(stats.byCategory).map(([k, v]) => `- ${k}: ${v}`).join("\n")
-  : "—"}
+          ? Object.entries(stats.byCategory).map(([k, v]) => `- ${k}: ${v}`).join("\n")
+          : "—"}
 
 ⚡ Urgency Breakdown:
 ${Object.entries(stats.byUrgency).length
-  ? Object.entries(stats.byUrgency).map(([k, v]) => `- ${k}: ${v}`).join("\n")
-  : "—"}`.trim();
+          ? Object.entries(stats.byUrgency).map(([k, v]) => `- ${k}: ${v}`).join("\n")
+          : "—"}`.trim();
 
       // AI narration feature removed - using accurate summary only
       const finalSummary = accurateSummary;
@@ -1128,7 +1128,7 @@ ${Object.entries(stats.byUrgency).length
     <div style={{ padding: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <button 
+          <button
             onClick={() => navigate("/")}
             style={{
               background: "var(--primary)",
@@ -1185,10 +1185,10 @@ ${Object.entries(stats.byUrgency).length
             >📊 Analytics</button>
           )}
           {/* Analyst Workload Indicator */}
-          <div className="glass-panel" style={{ 
-            background: analystWorkload > 5 ? "rgba(239, 68, 68, 0.1)" : "rgba(16, 185, 129, 0.1)", 
-            padding: "8px 16px", 
-            borderRadius: 20, 
+          <div className="glass-panel" style={{
+            background: analystWorkload > 5 ? "rgba(239, 68, 68, 0.1)" : "rgba(16, 185, 129, 0.1)",
+            padding: "8px 16px",
+            borderRadius: 20,
             fontWeight: 900,
             color: analystWorkload > 5 ? "var(--danger)" : "var(--success)",
             border: analystWorkload > 5 ? "1px solid rgba(239, 68, 68, 0.3)" : "1px solid rgba(16, 185, 129, 0.3)"
@@ -1287,26 +1287,26 @@ ${Object.entries(stats.byUrgency).length
             <h3 style={{ marginTop: 0, color: "var(--text-main)" }}>🧠 Analyst Fatigue Index</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 12 }}>
               {Object.entries(analystFatigueIndex).map(([uid, data]) => (
-                <div key={uid} className="glass-panel" style={{ 
-                  padding: 12, 
-                  background: data.fatigueLevel === 'critical' ? "rgba(239, 68, 68, 0.1)" : 
-                             data.fatigueLevel === 'high' ? "rgba(245, 158, 11, 0.1)" : 
-                             "rgba(0, 0, 0, 0.2)",
-                  border: data.fatigueLevel === 'critical' ? "1px solid var(--danger)" : 
-                         data.fatigueLevel === 'high' ? "1px solid var(--warning)" : 
-                         "1px solid var(--glass-border)"
+                <div key={uid} className="glass-panel" style={{
+                  padding: 12,
+                  background: data.fatigueLevel === 'critical' ? "rgba(239, 68, 68, 0.1)" :
+                    data.fatigueLevel === 'high' ? "rgba(245, 158, 11, 0.1)" :
+                      "rgba(0, 0, 0, 0.2)",
+                  border: data.fatigueLevel === 'critical' ? "1px solid var(--danger)" :
+                    data.fatigueLevel === 'high' ? "1px solid var(--warning)" :
+                      "1px solid var(--glass-border)"
                 }}>
                   <div style={{ fontWeight: 900, color: "var(--text-main)" }}>{data.name}</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
                     Active: {data.activeIncidents} | High Urgency: {data.highUrgencyIncidents} | Stuck: {data.stuckIncidents}
                   </div>
-                  <div style={{ 
-                    fontSize: 14, 
-                    fontWeight: 900, 
+                  <div style={{
+                    fontSize: 14,
+                    fontWeight: 900,
                     marginTop: 6,
-                    color: data.fatigueLevel === 'critical' ? "var(--danger)" : 
-                           data.fatigueLevel === 'high' ? "var(--warning)" : 
-                           "var(--success)"
+                    color: data.fatigueLevel === 'critical' ? "var(--danger)" :
+                      data.fatigueLevel === 'high' ? "var(--warning)" :
+                        "var(--success)"
                   }}>
                     Fatigue: {data.fatigueScore}% ({data.fatigueLevel})
                   </div>
@@ -1352,10 +1352,10 @@ ${Object.entries(stats.byUrgency).length
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
                 {stuckIncidents.map(issue => (
-                  <div key={issue.id} className="glass-panel" style={{ 
-                    padding: 12, 
-                    background: "rgba(239, 68, 68, 0.1)", 
-                    border: "1px solid var(--danger)" 
+                  <div key={issue.id} className="glass-panel" style={{
+                    padding: 12,
+                    background: "rgba(239, 68, 68, 0.1)",
+                    border: "1px solid var(--danger)"
                   }}>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
                       <div>
@@ -1365,7 +1365,7 @@ ${Object.entries(stats.byUrgency).length
                         </div>
                       </div>
                       {hasPermission(userRole, 'assign_incident') && (
-                        <button 
+                        <button
                           onClick={() => {
                             const newAnalyst = prompt("Reassign to:", issue.assignedTo);
                             if (newAnalyst && newAnalyst !== issue.assignedTo && issue.locked !== true) {
@@ -1374,7 +1374,7 @@ ${Object.entries(stats.byUrgency).length
                           }}
                           disabled={issue.locked === true}
                           className="btn-primary"
-                          style={{ 
+                          style={{
                             padding: "6px 12px", fontSize: 12,
                             opacity: issue.locked === true ? 0.5 : 1,
                             cursor: issue.locked === true ? "not-allowed" : "pointer"
@@ -1400,10 +1400,10 @@ ${Object.entries(stats.byUrgency).length
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
                 {clusters.map(cluster => (
-                  <div key={cluster.id} className="glass-panel" style={{ 
-                    padding: 12, 
-                    background: "rgba(139, 92, 246, 0.1)", 
-                    border: "1px solid rgba(139, 92, 246, 0.3)" 
+                  <div key={cluster.id} className="glass-panel" style={{
+                    padding: 12,
+                    background: "rgba(139, 92, 246, 0.1)",
+                    border: "1px solid rgba(139, 92, 246, 0.3)"
                   }}>
                     <div style={{ fontWeight: 900, color: "var(--text-main)" }}>
                       🚨 Campaign Cluster: {cluster.count} incidents linked
@@ -1422,15 +1422,15 @@ ${Object.entries(stats.byUrgency).length
             <h3 style={{ marginTop: 0, color: "var(--text-main)" }}>🏆 MTTR Leaderboard</h3>
             <div style={{ display: "grid", gap: 8 }}>
               {Object.entries(mttaMttrStats.analyst)
-                .sort(([,a], [,b]) => {
+                .sort(([, a], [, b]) => {
                   const aMinutes = parseInt(a.avgMTTR) || 9999;
                   const bMinutes = parseInt(b.avgMTTR) || 9999;
                   return aMinutes - bMinutes;
                 })
                 .slice(0, 5)
                 .map(([uid, stats], index) => (
-                  <div key={uid} className="glass-panel" style={{ 
-                    padding: 12, 
+                  <div key={uid} className="glass-panel" style={{
+                    padding: 12,
                     background: index === 0 ? "rgba(255, 215, 0, 0.1)" : "rgba(0, 0, 0, 0.2)",
                     border: index === 0 ? "1px solid gold" : "1px solid var(--glass-border)"
                   }}>
@@ -1656,13 +1656,13 @@ ${Object.entries(stats.byUrgency).length
           const needsAttn = needsAttention(issue);
 
           return (
-            <div 
-              key={issue.id} 
+            <div
+              key={issue.id}
               className="glass-panel"
-              style={{ 
-                border: slaDisplay.breached ? "2px solid var(--danger)" : "1px solid var(--glass-border)", 
-                padding: 16, 
-                borderRadius: 14, 
+              style={{
+                border: slaDisplay.breached ? "2px solid var(--danger)" : "1px solid var(--glass-border)",
+                padding: 16,
+                borderRadius: 14,
                 boxShadow: "var(--glass-shadow)",
                 background: slaDisplay.breached ? "rgba(239, 68, 68, 0.1)" : "var(--glass-bg)"
               }}
@@ -1685,23 +1685,23 @@ ${Object.entries(stats.byUrgency).length
                     <strong style={{ fontSize: 15, color: "var(--text-main)" }}>{issue.title}</strong>
                     {issue.locked && (
                       <span style={{
-                        background:"#ef4444",
-                        padding:"4px 8px",
-                        borderRadius:"6px",
-                        marginLeft:"8px",
-                        fontSize:"12px"
+                        background: "#ef4444",
+                        padding: "4px 8px",
+                        borderRadius: "6px",
+                        marginLeft: "8px",
+                        fontSize: "12px"
                       }}>
                         🔒 Governance Locked
                       </span>
                     )}
                     {needsAttn && (
-                      <span style={{ 
-                        background: "var(--warning)", 
-                        color: "#fff", 
-                        padding: "2px 8px", 
-                        borderRadius: 12, 
-                        fontSize: 10, 
-                        fontWeight: 900 
+                      <span style={{
+                        background: "var(--warning)",
+                        color: "#fff",
+                        padding: "2px 8px",
+                        borderRadius: 12,
+                        fontSize: 10,
+                        fontWeight: 900
                       }}>
                         ⚠ NEEDS ATTENTION
                       </span>
@@ -1737,17 +1737,17 @@ ${Object.entries(stats.byUrgency).length
                 <div style={{ fontWeight: 900, color: slaDisplay.color }}>{slaDisplay.label}</div>
 
                 {issue.locked && (
-                  <div style={{color:"#f87171"}}>
+                  <div style={{ color: "#f87171" }}>
                     SOC Manager Governance Lock Active
                   </div>
                 )}
 
                 {issue.predictedBreachRiskScore && (
-                  <div style={{ 
-                    fontSize: 12, 
-                    color: issue.breachRiskLevel === 'high' ? 'var(--danger)' : 
-                           issue.breachRiskLevel === 'medium' ? 'var(--warning)' : 'var(--success)',
-                    fontWeight: 900 
+                  <div style={{
+                    fontSize: 12,
+                    color: issue.breachRiskLevel === 'high' ? 'var(--danger)' :
+                      issue.breachRiskLevel === 'medium' ? 'var(--warning)' : 'var(--success)',
+                    fontWeight: 900
                   }}>
                     🎯 SLA Breach Risk: {issue.predictedBreachRiskScore} ({issue.breachRiskLevel?.toUpperCase()})
                   </div>
@@ -1791,12 +1791,12 @@ ${Object.entries(stats.byUrgency).length
                     style={{
                       opacity: issue.locked === true ? 0.5 : 1,
                       cursor: issue.locked === true ? "not-allowed" : "pointer",
-                      width: "100%", 
-                      padding: 10, 
-                      borderRadius: 10, 
-                      border: "1px solid var(--glass-border)", 
-                      background: "rgba(0, 0, 0, 0.3)", 
-                      color: "var(--text-main)" 
+                      width: "100%",
+                      padding: 10,
+                      borderRadius: 10,
+                      border: "1px solid var(--glass-border)",
+                      background: "rgba(0, 0, 0, 0.3)",
+                      color: "var(--text-main)"
                     }}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -1817,7 +1817,7 @@ ${Object.entries(stats.byUrgency).length
               <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {issue.status === "assigned" && (
                   <>
-                    <button 
+                    <button
                       disabled={issue.locked === true}
                       style={{
                         opacity: issue.locked === true ? 0.5 : 1,
@@ -1826,16 +1826,16 @@ ${Object.entries(stats.byUrgency).length
                       onClick={issue.locked === true ? null : () => updateStatus(issue, "in_progress")}
                       className="btn-primary"
                     >Start Investigation</button>
-                    <button 
+                    <button
                       disabled={issue.locked === true}
                       style={{
                         opacity: issue.locked === true ? 0.5 : 1,
                         cursor: issue.locked === true ? "not-allowed" : "pointer",
-                        background: "var(--success)", 
-                        color: "#fff", 
-                        border: "none", 
-                        padding: "8px 12px", 
-                        borderRadius: 8 
+                        background: "var(--success)",
+                        color: "#fff",
+                        border: "none",
+                        padding: "8px 12px",
+                        borderRadius: 8
                       }}
                       onClick={issue.locked === true ? null : () => updateStatus(issue, "resolved")}
                     >Resolve</button>
@@ -1843,48 +1843,48 @@ ${Object.entries(stats.byUrgency).length
                 )}
 
                 {issue.status === "in_progress" && (
-                  <button 
-                    disabled={issue.locked === true}
-                      style={{
-                        opacity: issue.locked === true ? 0.5 : 1,
-                        cursor: issue.locked === true ? "not-allowed" : "pointer",
-                        background: "var(--success)", 
-                        color: "#fff", 
-                        border: "none", 
-                        padding: "8px 12px", 
-                        borderRadius: 8 
-                      }}
-                      onClick={issue.locked === true ? null : () => updateStatus(issue, "resolved")}
-                    >Mark Contained</button>
-                )}
-
-                {canEscalate && (
-                  <button 
-                    disabled={issue.locked === true}
-                      style={{
-                        opacity: issue.locked === true ? 0.5 : 1,
-                        cursor: issue.locked === true ? "not-allowed" : "pointer",
-                        background: "var(--warning)", 
-                        color: "#fff", 
-                        border: "none", 
-                        padding: "8px 12px", 
-                        borderRadius: 8 
-                      }}
-                      onClick={issue.locked === true ? null : () => escalateIssue(issue)}
-                    >Escalate to SOC Lead</button>
-                )}
-
-                {issue.status === "resolved" && !issue.isDeleted && (
-                  <button 
+                  <button
                     disabled={issue.locked === true}
                     style={{
                       opacity: issue.locked === true ? 0.5 : 1,
                       cursor: issue.locked === true ? "not-allowed" : "pointer",
-                      background: "var(--danger)", 
-                      color: "#fff", 
-                      border: "none", 
-                      padding: "8px 12px", 
-                      borderRadius: 8 
+                      background: "var(--success)",
+                      color: "#fff",
+                      border: "none",
+                      padding: "8px 12px",
+                      borderRadius: 8
+                    }}
+                    onClick={issue.locked === true ? null : () => updateStatus(issue, "resolved")}
+                  >Mark Contained</button>
+                )}
+
+                {canEscalate && (
+                  <button
+                    disabled={issue.locked === true}
+                    style={{
+                      opacity: issue.locked === true ? 0.5 : 1,
+                      cursor: issue.locked === true ? "not-allowed" : "pointer",
+                      background: "var(--warning)",
+                      color: "#fff",
+                      border: "none",
+                      padding: "8px 12px",
+                      borderRadius: 8
+                    }}
+                    onClick={issue.locked === true ? null : () => escalateIssue(issue)}
+                  >Escalate to SOC Lead</button>
+                )}
+
+                {issue.status === "resolved" && !issue.isDeleted && (
+                  <button
+                    disabled={issue.locked === true}
+                    style={{
+                      opacity: issue.locked === true ? 0.5 : 1,
+                      cursor: issue.locked === true ? "not-allowed" : "pointer",
+                      background: "var(--danger)",
+                      color: "#fff",
+                      border: "none",
+                      padding: "8px 12px",
+                      borderRadius: 8
                     }}
                     onClick={issue.locked === true ? null : () => deleteResolvedIssue(issue)}
                   >Archive Incident</button>

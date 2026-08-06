@@ -205,7 +205,7 @@ export function SecurityOperationsConsole({ userRole, currentUser }) {
                       </span>
                     </div>
                     <p style={{ margin: "6px 0 0 0", fontSize: "12px", color: "#cbd5e1" }}>{issue.description}</p>
-                    
+
                     {/* SIEM Expandable Correlation Breakdown Tree */}
                     <IncidentCorrelationTree incident={issue} />
                   </div>

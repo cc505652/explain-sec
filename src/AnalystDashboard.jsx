@@ -528,16 +528,16 @@ export default function AnalystDashboard() {
       let filtered = data.filter(i => isVisibleToRole(i, normalizedRole));
 
       if (normalizedRole === "soc_l2") {
-        filtered = filtered.filter(i => 
+        filtered = filtered.filter(i =>
           (i.pirOwner === auth.currentUser?.uid) ||
           (i.pirContributors && i.pirContributors.includes(auth.currentUser?.uid)) ||
           (i.rcaOwner === auth.currentUser?.uid) ||
           (i.rcaContributors && i.rcaContributors.includes(auth.currentUser?.uid)) ||
           (i.status !== "false_positive" &&
-           i.status !== "resolved" &&
-           i.status !== "closed" &&
-           i.status !== "threat_hunt" &&
-           !i.isDeleted)
+            i.status !== "resolved" &&
+            i.status !== "closed" &&
+            i.status !== "threat_hunt" &&
+            !i.isDeleted)
         );
       }
 
@@ -580,16 +580,16 @@ export default function AnalystDashboard() {
         // Use unified visibility function for fallback query
         let filtered = fallbackData.filter(i => isVisibleToRole(i, normalizedRole));
         if (normalizedRole === "soc_l2") {
-          filtered = filtered.filter(i => 
+          filtered = filtered.filter(i =>
             (i.pirOwner === auth.currentUser?.uid) ||
             (i.pirContributors && i.pirContributors.includes(auth.currentUser?.uid)) ||
             (i.rcaOwner === auth.currentUser?.uid) ||
             (i.rcaContributors && i.rcaContributors.includes(auth.currentUser?.uid)) ||
             (i.status !== "false_positive" &&
-             i.status !== "resolved" &&
-             i.status !== "closed" &&
-             i.status !== "threat_hunt" &&
-             !i.isDeleted)
+              i.status !== "resolved" &&
+              i.status !== "closed" &&
+              i.status !== "threat_hunt" &&
+              !i.isDeleted)
           );
         }
         setIssues(filtered);
@@ -1670,205 +1670,205 @@ export default function AnalystDashboard() {
                         {isIR && (!["resolved", "closed", "completed", "false_positive", "risk_accepted"].includes(issue.status) && !issue.isDeleted) && (
                           (normalizeRole(issue.assignedTo) === "ir" || normalizeRole(issue.escalatedTo) === "ir" || issue.assignedTo === "IR Team" || issue.escalationApproved === true || ["escalation_approved", "ir_in_progress", "containment_pending_approval", "containment_in_progress", "containment_action_submitted", "containment_approved", "containment_rejected", "containment_review_again", "containment_executed", "containment_pending"].includes(issue.status))
                         ) && (
-                          <div style={{ marginTop: 10, padding: 8, background: "rgba(0,0,0,0.05)", borderRadius: 4 }}>
-                            <b style={{ fontSize: 12, color: "var(--text-main)", marginBottom: 4 }}>Containment Actions</b>
+                            <div style={{ marginTop: 10, padding: 8, background: "rgba(0,0,0,0.05)", borderRadius: 4 }}>
+                              <b style={{ fontSize: 12, color: "var(--text-main)", marginBottom: 4 }}>Containment Actions</b>
 
-                            {/* Show manager decision if rejected or review_again */}
-                            {(issue.status === "containment_rejected" || issue.status === "containment_review_again") && issue.managerDecision && (
-                              <div style={{ marginTop: 4, padding: 4, background: "rgba(239,68,68,0.1)", borderRadius: 4, fontSize: 11 }}>
-                                <div style={{ color: "#ef4444", fontWeight: "bold" }}>
-                                  {issue.status === "containment_rejected" ? "❌ Action Rejected" : "⚠ Manager requested changes"}
+                              {/* Show manager decision if rejected or review_again */}
+                              {(issue.status === "containment_rejected" || issue.status === "containment_review_again") && issue.managerDecision && (
+                                <div style={{ marginTop: 4, padding: 4, background: "rgba(239,68,68,0.1)", borderRadius: 4, fontSize: 11 }}>
+                                  <div style={{ color: "#ef4444", fontWeight: "bold" }}>
+                                    {issue.status === "containment_rejected" ? "❌ Action Rejected" : "⚠ Manager requested changes"}
+                                  </div>
+                                  <div style={{ color: "#aaa" }}>{issue.managerDecision.comment}</div>
                                 </div>
-                                <div style={{ color: "#aaa" }}>{issue.managerDecision.comment}</div>
-                              </div>
-                            )}
+                              )}
 
-                            {/* Show submit buttons when IR can submit action (active IR state, not pending manager review) */}
-                            {issue.status !== "containment_action_submitted" && issue.status !== "containment_approved" && (
-                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => submitContainmentAction(issue.id, "block_ip", "Block malicious IP address")}
-                                  style={{
-                                    background: "var(--danger)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Submit Block IP
-                                </button>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => submitContainmentAction(issue.id, "patch_system", "Patch vulnerable system")}
-                                  style={{
-                                    background: "var(--warning)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Submit Patch System
-                                </button>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => submitContainmentAction(issue.id, "isolate_host", "Isolate compromised host")}
-                                  style={{
-                                    background: "var(--secondary)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Submit Isolate Host
-                                </button>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => submitContainmentAction(issue.id, "disable_account", "Disable compromised account")}
-                                  style={{
-                                    background: "var(--primary)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Submit Disable Account
-                                </button>
-                              </div>
-                            )}
-
-                            {/* Show action buttons without submit for review_again state */}
-                            {issue.status === "containment_review_again" && (
-                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => updateContainmentAction(issue.id, "block_ip", "Block malicious IP address")}
-                                  style={{
-                                    background: "var(--danger)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Block IP
-                                </button>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => updateContainmentAction(issue.id, "patch_system", "Patch vulnerable system")}
-                                  style={{
-                                    background: "var(--warning)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Patch System
-                                </button>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => updateContainmentAction(issue.id, "isolate_host", "Isolate compromised host")}
-                                  style={{
-                                    background: "var(--secondary)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Isolate Host
-                                </button>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => updateContainmentAction(issue.id, "disable_account", "Disable compromised account")}
-                                  style={{
-                                    background: "var(--primary)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Disable Account
-                                </button>
-                                <button
-                                  disabled={issue.locked === true}
-                                  onClick={() => submitContainmentAction(issue.id, issue.irAction?.type || "block_ip", issue.irAction?.details || "Updated action")}
-                                  style={{
-                                    background: "var(--success)",
-                                    color: "#fff",
-                                    border: "none",
-                                    padding: "4px 8px",
-                                    borderRadius: 4,
-                                    fontSize: 10,
-                                    opacity: issue.locked ? 0.5 : 1,
-                                    cursor: issue.locked ? "not-allowed" : "pointer"
-                                  }}
-                                >
-                                  Resubmit
-                                </button>
-                              </div>
-                            )}
-
-                            {/* Show execute button when manager approved */}
-                            {issue.status === "containment_approved" && issue.irAction && (
-                              <div style={{ marginTop: 4, padding: 4, background: "rgba(34,197,94,0.1)", borderRadius: 4 }}>
-                                <div style={{ color: "#22c55e", fontWeight: "bold", fontSize: 11 }}>
-                                  ✅ Action Approved: {issue.irAction.type}
+                              {/* Show submit buttons when IR can submit action (active IR state, not pending manager review) */}
+                              {issue.status !== "containment_action_submitted" && issue.status !== "containment_approved" && (
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => submitContainmentAction(issue.id, "block_ip", "Block malicious IP address")}
+                                    style={{
+                                      background: "var(--danger)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Submit Block IP
+                                  </button>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => submitContainmentAction(issue.id, "patch_system", "Patch vulnerable system")}
+                                    style={{
+                                      background: "var(--warning)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Submit Patch System
+                                  </button>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => submitContainmentAction(issue.id, "isolate_host", "Isolate compromised host")}
+                                    style={{
+                                      background: "var(--secondary)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Submit Isolate Host
+                                  </button>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => submitContainmentAction(issue.id, "disable_account", "Disable compromised account")}
+                                    style={{
+                                      background: "var(--primary)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Submit Disable Account
+                                  </button>
                                 </div>
-                                <div style={{ color: "#aaa", fontSize: 10 }}>{issue.irAction.details}</div>
-                              </div>
-                            )}
+                              )}
 
-                            {/* Show submitted status */}
-                            {issue.status === "containment_action_submitted" && (
-                              <div style={{ marginTop: 4, padding: 4, background: "rgba(245,158,11,0.1)", borderRadius: 4 }}>
-                                <div style={{ color: "#f59e0b", fontWeight: "bold", fontSize: 11 }}>
-                                  🟡 Action Submitted - Awaiting Manager Review
+                              {/* Show action buttons without submit for review_again state */}
+                              {issue.status === "containment_review_again" && (
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => updateContainmentAction(issue.id, "block_ip", "Block malicious IP address")}
+                                    style={{
+                                      background: "var(--danger)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Block IP
+                                  </button>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => updateContainmentAction(issue.id, "patch_system", "Patch vulnerable system")}
+                                    style={{
+                                      background: "var(--warning)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Patch System
+                                  </button>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => updateContainmentAction(issue.id, "isolate_host", "Isolate compromised host")}
+                                    style={{
+                                      background: "var(--secondary)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Isolate Host
+                                  </button>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => updateContainmentAction(issue.id, "disable_account", "Disable compromised account")}
+                                    style={{
+                                      background: "var(--primary)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Disable Account
+                                  </button>
+                                  <button
+                                    disabled={issue.locked === true}
+                                    onClick={() => submitContainmentAction(issue.id, issue.irAction?.type || "block_ip", issue.irAction?.details || "Updated action")}
+                                    style={{
+                                      background: "var(--success)",
+                                      color: "#fff",
+                                      border: "none",
+                                      padding: "4px 8px",
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      opacity: issue.locked ? 0.5 : 1,
+                                      cursor: issue.locked ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    Resubmit
+                                  </button>
                                 </div>
-                                <div style={{ color: "#aaa", fontSize: 10 }}>{issue.irAction?.details}</div>
-                              </div>
-                            )}
+                              )}
 
-                            {/* Show executed status */}
-                            {issue.status === "containment_executed" && (
-                              <div style={{ marginTop: 4, padding: 4, background: "rgba(16,185,129,0.1)", borderRadius: 4 }}>
-                                <div style={{ color: "#10b981", fontWeight: "bold", fontSize: 11 }}>
-                                  ✅ Containment Executed Successfully
+                              {/* Show execute button when manager approved */}
+                              {issue.status === "containment_approved" && issue.irAction && (
+                                <div style={{ marginTop: 4, padding: 4, background: "rgba(34,197,94,0.1)", borderRadius: 4 }}>
+                                  <div style={{ color: "#22c55e", fontWeight: "bold", fontSize: 11 }}>
+                                    ✅ Action Approved: {issue.irAction.type}
+                                  </div>
+                                  <div style={{ color: "#aaa", fontSize: 10 }}>{issue.irAction.details}</div>
                                 </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
+                              )}
+
+                              {/* Show submitted status */}
+                              {issue.status === "containment_action_submitted" && (
+                                <div style={{ marginTop: 4, padding: 4, background: "rgba(245,158,11,0.1)", borderRadius: 4 }}>
+                                  <div style={{ color: "#f59e0b", fontWeight: "bold", fontSize: 11 }}>
+                                    🟡 Action Submitted - Awaiting Manager Review
+                                  </div>
+                                  <div style={{ color: "#aaa", fontSize: 10 }}>{issue.irAction?.details}</div>
+                                </div>
+                              )}
+
+                              {/* Show executed status */}
+                              {issue.status === "containment_executed" && (
+                                <div style={{ marginTop: 4, padding: 4, background: "rgba(16,185,129,0.1)", borderRadius: 4 }}>
+                                  <div style={{ color: "#10b981", fontWeight: "bold", fontSize: 11 }}>
+                                    ✅ Containment Executed Successfully
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                         {/* 🔹 Display IR Actions */}
                         {issue.containmentActions && issue.containmentActions.length > 0 && (
@@ -2548,7 +2548,7 @@ function PIRWorkspacePanel({ issue, usersData, normalizedRole, getAnalystDisplay
         appendLifecycleEvent(issue.id, TIMELINE_EVENTS.RCA_RECOMMENDED, normalizedRole || "analyst");
         logGovernanceAudit(issue.id, AUDIT_ACTIONS.RCA_RECOMMENDED, normalizedRole || "analyst");
       }
-      
+
       setToast("✅ PIR completed successfully");
     } catch (err) {
       alert("Failed to complete PIR: " + err.message);
@@ -2605,9 +2605,9 @@ function PIRWorkspacePanel({ issue, usersData, normalizedRole, getAnalystDisplay
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
         <h4 style={{ color: "var(--text-main)", margin: 0, fontSize: "14px" }}>📋 Post-Incident Review (PIR) Workspace</h4>
         <span style={{
-          background: issue.pirStatus === "completed" ? "var(--success)" : 
-                      issue.pirStatus === "in_progress" ? "var(--primary)" : 
-                      issue.pirStatus === "assigned" ? "var(--warning)" : "var(--text-muted)",
+          background: issue.pirStatus === "completed" ? "var(--success)" :
+            issue.pirStatus === "in_progress" ? "var(--primary)" :
+              issue.pirStatus === "assigned" ? "var(--warning)" : "var(--text-muted)",
           color: "#fff",
           fontSize: "10px",
           padding: "2px 8px",
@@ -3174,9 +3174,9 @@ function RCAWorkspacePanel({ issue, usersData, normalizedRole, getAnalystDisplay
         </div>
         <span style={{
           background: isApproved ? "var(--success)" :
-                      issue.rcaStatus === "completed" ? "#f59e0b" :
-                      issue.rcaStatus === "in_progress" ? "var(--primary)" :
-                      issue.rcaStatus === "assigned" ? "var(--warning)" : "var(--text-muted)",
+            issue.rcaStatus === "completed" ? "#f59e0b" :
+              issue.rcaStatus === "in_progress" ? "var(--primary)" :
+                issue.rcaStatus === "assigned" ? "var(--warning)" : "var(--text-muted)",
           color: "#fff",
           fontSize: "10px",
           padding: "2px 8px",
