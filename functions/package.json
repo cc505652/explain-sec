@@ -3,6 +3,14 @@
   "description": "Cloud Functions for Firebase",
   "scripts": {
     "lint": "eslint .",
+    "migrate": "node scripts/migrate.js",
+    "test:mt1": "node --test test/mt1.integration.test.js",
+    "test:mt2": "node --test test/mt2.integration.test.js",
+    "test:mt3": "node --test test/mt3.integration.test.js",
+    "test:mt4": "node --test test/mt4.integration.test.js",
+    "test:mt5": "node --test test/mt5.integration.test.js",
+    "test:audit": "node --test test/authorizationAudit.integration.test.js",
+    "test:integration": "node --test test/mt1.integration.test.js && node --test test/mt2.integration.test.js && node --test test/mt3.integration.test.js && node --test test/mt4.integration.test.js && node --test test/mt5.integration.test.js",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
@@ -17,7 +25,8 @@
     "@google/generative-ai": "^0.24.1",
     "cors": "^2.8.5",
     "firebase-admin": "^13.6.0",
-    "firebase-functions": "^7.0.0"
+    "firebase-functions": "^7.0.0",
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "eslint": "^8.15.0",
