@@ -8,7 +8,13 @@ function required(name) {
 
 function sslConfig() {
   if (process.env.EXPLAINSEC_PG_SSL !== "true") return false;
-  return { rejectUnauthorized: process.env.EXPLAINSEC_PG_SSL_REJECT_UNAUTHORIZED !== "false" };
+  const config = {
+    rejectUnauthorized: process.env.EXPLAINSEC_PG_SSL_REJECT_UNAUTHORIZED !== "false",
+  };
+  if (process.env.EXPLAINSEC_PG_SSL_SERVERNAME) {
+    config.servername = process.env.EXPLAINSEC_PG_SSL_SERVERNAME;
+  }
+  return config;
 }
 
 function connectionConfig(urlName) {
