@@ -373,8 +373,6 @@ GRANT EXECUTE ON FUNCTION fn_record_authorization_decision(
 ) TO explainsec_runtime;
 
 REVOKE ALL ON explainsec_authorization_audit FROM explainsec_runtime;
-GRANT USAGE ON SCHEMA public TO explainsec_runtime;
-GRANT USAGE ON SCHEMA public TO explainsec_audit_writer;
 GRANT INSERT ON explainsec_authorization_audit TO explainsec_audit_writer;
 GRANT SELECT ON
   explainsec_users, explainsec_identities, explainsec_organizations,

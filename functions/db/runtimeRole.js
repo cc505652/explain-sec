@@ -26,7 +26,6 @@ async function assertRuntimeRoleNoBypassRls(pool = getRuntimePool()) {
 
 async function grantRuntimePrivileges(pool, role = runtimeRole()) {
   const quotedRole = quoteIdentifier(role);
-  await pool.query(`GRANT USAGE ON SCHEMA public TO ${quotedRole}`);
   await pool.query(`
     GRANT SELECT, INSERT, UPDATE, DELETE
     ON explainsec_users, explainsec_identities, explainsec_organizations,

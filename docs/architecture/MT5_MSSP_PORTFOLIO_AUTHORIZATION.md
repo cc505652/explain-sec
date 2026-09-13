@@ -85,6 +85,13 @@ and immediately re-enabling them. It then removes the fixture identity. This
 does not grant the runtime role cleanup privileges and does not weaken
 production append-only behavior.
 
+Cloud SQL schema ACL bootstrap is separate from application migrations. Before
+runtime use, a controlled Cloud SQL administrative identity must grant `USAGE`
+on `public` to `explainsec_runtime` and `explainsec_audit_writer`. Migration 004
+does not attempt to modify the externally owned schema ACL; it grants only the
+object-level privileges needed by the controlled audit function. See
+`docs/architecture/POSTGRES_CLOUD_SQL_BOOTSTRAP.md`.
+
 **Repository verified:** SQL ordering, role preflight checks, privilege
 boundaries, scope validation, and test cleanup strategy. **Cloud SQL
 unverified:** managed-role ownership transfer, forced-RLS behavior for the
