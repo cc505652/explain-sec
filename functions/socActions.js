@@ -29,8 +29,11 @@
  */
 
 const admin = require("firebase-admin");
+const crypto = require("node:crypto");
 const { onRequest } = require("firebase-functions/v2/https");
 const { FieldValue } = require("firebase-admin/firestore");
+const { resolveSecurityContext } = require("./securityContext");
+const { authorize } = require("./policyEngine");
 
 // Initialize Firebase Admin if not already initialized
 if (!admin.apps.length) {
@@ -120,19 +123,6 @@ async function safeUpdate(ref, data, label) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPER: Get caller's authoritative role from Firestore (Admin SDK, never trust client)
-// ─────────────────────────────────────────────────────────────────────────────
-async function getCallerRole(uid) {
-  const snap = await withTimeout(
-    db.collection("users").doc(uid).get(),
-    `getCallerRole(${uid})`
-  );
-  if (!snap.exists) throw new Error("User profile not found");
-  const data = snap.data();
-  return { role: data.role, team: data.team };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Assert governance lock (throws if locked and caller is not manager/admin)
 // ─────────────────────────────────────────────────────────────────────────────
 async function assertNotLocked(incidentRef, callerRole) {
@@ -175,17 +165,57 @@ async function verifyAuth(req) {
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     throw new Error("Unauthorized: No token provided");
   }
-  const token = authHeader.split("Bearer ")[1];
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token || token.includes(" ")) {
+    throw new Error("Unauthorized: Invalid token");
+  }
+  let decoded;
   try {
-    const decoded = await withTimeout(
+    decoded = await withTimeout(
       admin.auth().verifyIdToken(token),
       "verifyIdToken"
     );
-    return decoded;
   } catch (error) {
     if (error.message.startsWith("Operation timed out")) throw error;
     throw new Error("Unauthorized: Invalid token");
   }
+  const context = await withTimeout(
+    resolveSecurityContext(decoded.uid, {
+      organizationId: req.body && (req.body.organizationId || req.body.organization_id),
+      tenantId: req.body && (req.body.tenantId || req.body.tenant_id),
+    }, undefined, {
+      requestId: crypto.randomUUID(),
+      sessionId: decoded.session_id || null,
+      authenticationStrength: "firebase_id_token",
+    }),
+    "resolveSecurityContext"
+  );
+  // Canonical MT-3 policy is the final server-side boundary. The legacy SOC
+  // role checks below remain in place until their Firestore role model is
+  // retired; this check adds tenant/organization ownership and default-deny
+  // semantics without changing that model.
+  const policyDecision = authorize({
+    subject: {
+      uid: decoded.uid,
+      userId: context.userId,
+      status: context.userStatus,
+      roles: context.roles,
+      memberships: context.memberships,
+    },
+    resource: {
+      organizationId: context.organizationId,
+      tenantId: context.tenantId,
+      requiresTenant: Boolean(context.tenantId),
+    },
+    action: "soc:read",
+    logger: (entry) => console.info("[AUTHZ]", entry),
+  });
+  if (!policyDecision.allowed) {
+    const error = new Error(`Forbidden: ${policyDecision.reason}`);
+    error.code = "PERMISSION_DENIED";
+    throw error;
+  }
+  return { ...decoded, context };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -234,7 +264,7 @@ exports.escalateIncident = onRequest(
       const { incidentId } = req.body;
       if (!incidentId) return res.status(400).json({ success: false, error: "Missing incidentId" });
 
-      const { role, team } = await getCallerRole(uid);
+      const { role, team } = auth.context;
 
       const ALLOWED_ROLES = ["analyst", "soc_l1", "soc_l2", "ir", "threat_hunter", "soc_manager", "admin"];
       if (!ALLOWED_ROLES.includes(role)) {
@@ -355,7 +385,7 @@ exports.approveEscalation = onRequest(
       const { incidentId } = req.body;
       if (!incidentId) return res.status(400).json({ success: false, error: "Missing incidentId" });
 
-      const { role } = await getCallerRole(uid);
+      const { role } = auth.context;
       if (role !== "soc_manager" && role !== "admin") {
         return res.status(403).json({ success: false, error: "Only SOC Manager can approve escalations" });
       }
@@ -437,7 +467,7 @@ exports.denyEscalation = onRequest(
       const { incidentId, reason } = req.body;
       if (!incidentId) return res.status(400).json({ success: false, error: "Missing incidentId" });
 
-      const { role } = await getCallerRole(uid);
+      const { role } = auth.context;
       if (role !== "soc_manager" && role !== "admin") {
         return res.status(403).json({ success: false, error: "Only SOC Manager can deny escalations" });
       }
@@ -523,7 +553,7 @@ exports.performContainment = onRequest(
         return res.status(400).json({ success: false, error: `Invalid containment action: ${actionType}` });
       }
 
-      const { role, team } = await getCallerRole(uid);
+      const { role, team } = auth.context;
       const IR_ROLES = ["ir", "soc_manager", "admin"];
       if (!IR_ROLES.includes(role) && team !== "incident_response") {
         return res.status(403).json({ success: false, error: "Only IR Team can perform containment actions" });
@@ -607,7 +637,7 @@ exports.approveContainment = onRequest(
       const { incidentId } = req.body;
       if (!incidentId) return res.status(400).json({ success: false, error: "Missing incidentId" });
 
-      const { role } = await getCallerRole(uid);
+      const { role } = auth.context;
       if (role !== "soc_manager" && role !== "admin") {
         return res.status(403).json({ success: false, error: "Only SOC Manager can approve containment" });
       }
@@ -689,7 +719,7 @@ exports.lockIncident = onRequest(
       const uid = auth.uid;
       console.log("[lockIncident] AFTER AUTH uid=", uid, "lock=", lock);
 
-      const { role } = await getCallerRole(uid);
+      const { role } = auth.context;
       if (role !== "soc_manager" && role !== "admin") {
         return res.status(403).json({ success: false, error: "Only SOC Manager can lock/unlock incidents" });
       }
@@ -760,7 +790,7 @@ exports.updateRole = onRequest(
         return res.status(400).json({ success: false, error: "targetUid and newRole required" });
       }
 
-      const { role: callerRole } = await getCallerRole(uid);
+      const { role: callerRole } = auth.context;
       if (callerRole !== "admin") {
         return res.status(403).json({ success: false, error: "Only Admin can update user roles" });
       }
@@ -828,7 +858,7 @@ exports.updateIncidentStatus = onRequest(
       const uid = auth.uid;
       console.log("[updateIncidentStatus] AFTER AUTH uid=", uid);
 
-      const { role, team } = await getCallerRole(uid);
+      const { role, team } = auth.context;
 
       const ALLOWED_ROLES = ["analyst", "soc_l1", "soc_l2", "ir", "threat_hunter", "soc_manager", "admin"];
       if (!ALLOWED_ROLES.includes(role)) {
@@ -920,7 +950,7 @@ exports.governanceActions = onRequest(
 
       const auth = await verifyAuth(req);
       const uid = auth.uid;
-      const { role } = await getCallerRole(uid);
+      const { role } = auth.context;
       console.log(`[governanceActions] AFTER AUTH uid=${uid} role=${role} action=${actionType} incident=${incidentId}`);
 
       if (role !== "soc_manager" && role !== "admin") {
@@ -1219,7 +1249,7 @@ exports.bulkGovernanceAction = onRequest(
       }
 
       console.log("[bulkGovernanceAction] BEFORE DB read (caller role)");
-      const { role } = await getCallerRole(uid);
+      const { role } = auth.context;
       console.log("[bulkGovernanceAction] AFTER DB read role=", role, "action=", actionType, "count=", incidentIds.length);
 
       if (!["soc_manager", "admin"].includes(role)) {
@@ -1380,7 +1410,7 @@ exports.deleteUser = onRequest(
       const callerUid = authToken.uid;
       console.log("[deleteUser] AFTER AUTH callerUid=", callerUid);
 
-      const { role } = await getCallerRole(callerUid);
+      const { role } = authToken.context;
       console.log("[deleteUser] role=", role, "targetUid=", targetUid);
 
       if (role !== "admin") return res.status(403).json({ success: false, error: "Only Admin can delete users" });
