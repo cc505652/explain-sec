@@ -1019,7 +1019,7 @@ Evolve ExplainSec from a SOC simulator into a complete security operations platf
 
 **EXPLAIN-SEC is proprietary software.**
 
-Copyright © 2026 [YOUR LEGAL NAME]. All Rights Reserved.
+Copyright © 2026 [Chinmay Chauhan]. All Rights Reserved.
 
 **No license is granted for reproduction, modification, distribution,
 forking, commercial use, derivative works, or redistribution without
