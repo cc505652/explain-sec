@@ -1015,9 +1015,20 @@ Evolve ExplainSec from a SOC simulator into a complete security operations platf
 > ExplainSec's modular architecture has been intentionally designed to support future research into projects such as **Sentrix** (next-generation SIEM & honeypot telemetry) and **SecRule** (vendor-neutral detection engineering with cross-platform rule compilation). More details will be shared as these projects mature.
 ---
 
-## 📄 License
+## License
 
-MIT — see [LICENSE](./LICENSE) for details.
+**EXPLAIN-SEC is proprietary software.**
+
+Copyright © 2026 [YOUR LEGAL NAME]. All Rights Reserved.
+
+**No license is granted for reproduction, modification, distribution,
+forking, commercial use, derivative works, or redistribution without
+prior written authorization from the copyright owner.**
+
+Access to this repository does not grant permission to use, copy, modify,
+fork, distribute, or reproduce the software.
+
+See [`LICENSE`](./LICENSE) for the complete proprietary terms.
 
 ---
 
