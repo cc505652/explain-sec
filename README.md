@@ -1021,12 +1021,15 @@ Evolve ExplainSec from a SOC simulator into a complete security operations platf
 
 Copyright © 2026 [Chinmay Chauhan]. All Rights Reserved.
 
-**No license is granted for reproduction, modification, distribution,
-forking, commercial use, derivative works, or redistribution without
-prior written authorization from the copyright owner.**
+**No license is granted for access, use, reproduction, modification,
+distribution, forking, commercial use, creation of derivative works,
+redistribution, or incorporation of any portion of this software into
+another project without prior written authorization from the copyright
+owner.**
 
-Access to this repository does not grant permission to use, copy, modify,
-fork, distribute, or reproduce the software.
+Access to this repository does not grant permission to use, copy,
+modify, fork, distribute, reproduce, or create derivative works from
+the software.
 
 See [`LICENSE`](./LICENSE) for the complete proprietary terms.
 
@@ -1034,5 +1037,6 @@ See [`LICENSE`](./LICENSE) for the complete proprietary terms.
 
 <div align="center">
   <sub>Built with React 18 · Firebase · Cloud Functions · Entity Registry Architecture</sub><br/>
-  <sub>ExplainSec v2.0.0 — Security Operations Platform & Telemetry Simulation Engine. Every write is accountable.</sub>
+  <sub>EXPLAIN-SEC v2.0.0 — Proprietary Security Operations Platform & Telemetry Simulation Engine</sub>
+  <sub>© 2026 Chinmay Chauhan. All Rights Reserved.</sub>
 </div>
